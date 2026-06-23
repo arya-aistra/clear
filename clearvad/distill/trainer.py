@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from clearvad import CHUNK_SAMPLES
-from clearvad.distill.losses import DFKDLoss, agreement_rate
+from clearvad.distill.losses import DFKDLoss, agreement_rate, classification_stats
 from clearvad.distill.synthetic_gen import SyntheticAudioGenerator
 from clearvad.distill.teacher import SileroTeacher
 from clearvad.utils.logging_utils import get_logger, write_csv, write_json
@@ -92,8 +92,8 @@ class DFKDTrainer:
         self._holdout = (windows, probs)
 
     @torch.no_grad()
-    def evaluate_agreement(self, windows=None, teacher_probs=None, threshold: float = 0.5) -> float:
-        """Teacher-student agreement at threshold on a (held-out) batch."""
+    def evaluate_metrics(self, windows=None, teacher_probs=None, threshold: float = 0.5) -> dict:
+        """Agreement + speech-class P/R/F1 on a (held-out) batch (honest under imbalance)."""
         self.model.eval()
         if windows is None:
             self._ensure_holdout()
@@ -102,7 +102,11 @@ class DFKDTrainer:
         logits = self.model.forward_sequence(windows, return_logit=True)
         student_probs = torch.sigmoid(logits).cpu()
         self.model.train()
-        return agreement_rate(student_probs, teacher_probs.cpu(), threshold)
+        return classification_stats(student_probs, teacher_probs.cpu(), threshold)
+
+    @torch.no_grad()
+    def evaluate_agreement(self, windows=None, teacher_probs=None, threshold: float = 0.5) -> float:
+        return self.evaluate_metrics(windows, teacher_probs, threshold)["agreement"]
 
     @torch.no_grad()
     def evaluate_transfer_real(self, real_audio, threshold: float = 0.5) -> Dict[str, float]:
@@ -122,9 +126,8 @@ class DFKDTrainer:
         real_audio = real_audio[:, : K * CHUNK_SAMPLES]
         teacher_probs = self.teacher.label(real_audio)
         windows = self.teacher.build_student_windows(real_audio)
-        agree = self.evaluate_agreement(windows, teacher_probs, threshold)
-        return {"transfer_agreement": round(agree, 4),
-                "teacher_speech_frac": round(float((teacher_probs > 0.5).float().mean()), 4)}
+        m = self.evaluate_metrics(windows, teacher_probs, threshold)
+        return {f"transfer_{k}": v for k, v in m.items()}
 
     # ------------------------------------------------------------ training
     def run_stage(self, cfg: Dict[str, Any], stage_name: str = "stage1",
@@ -183,20 +186,23 @@ class DFKDTrainer:
             if step % log_every == 0:
                 row = {"stage": stage_name, "step": step, "lr": sched.get_last_lr()[0], **parts}
                 if step % agree_every == 0:
-                    row["agreement"] = round(self.evaluate_agreement(), 4)
+                    row.update(self.evaluate_metrics())
                 self.history.append(row)
                 LOG.info("[%s] step %d  total=%.4f soft=%.4f bnd=%.4f sm=%.4f%s",
                          stage_name, step, parts["total"], parts["soft"], parts["boundary"],
                          parts["smooth"],
-                         f"  agree={row['agreement']:.3f}" if "agreement" in row else "")
+                         (f"  agree={row['agreement']:.3f} speech_f1={row['speech_f1']:.3f}"
+                          f" recall={row['speech_recall']:.3f}") if "agreement" in row else "")
 
             if ckpt_every and step > 0 and step % ckpt_every == 0:
                 self.save(f"{stage_name}_step{step}.pt")
 
-        final_agree = self.evaluate_agreement()
+        final_metrics = self.evaluate_metrics()
         self.save(f"{stage_name}_final.pt")
-        LOG.info("[%s] DONE final agreement=%.4f", stage_name, final_agree)
-        return {"stage": stage_name, "final_agreement": final_agree, "steps": steps}
+        LOG.info("[%s] DONE  agreement=%.4f  speech_f1=%.4f  recall=%.4f  prec=%.4f",
+                 stage_name, final_metrics["agreement"], final_metrics["speech_f1"],
+                 final_metrics["speech_recall"], final_metrics["speech_precision"])
+        return {"stage": stage_name, "steps": steps, "final_metrics": final_metrics}
 
     # ------------------------------------------------------------ io
     def save(self, name: str) -> Path:

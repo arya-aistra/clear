@@ -112,3 +112,29 @@ def agreement_rate(student_probs: Tensor, teacher_probs: Tensor, threshold: floa
     s = (student_probs > threshold)
     t = (teacher_probs > threshold)
     return float((s == t).float().mean())
+
+
+@torch.no_grad()
+def classification_stats(student_probs: Tensor, teacher_probs: Tensor,
+                         threshold: float = 0.5, eps: float = 1e-9) -> dict:
+    """Agreement PLUS speech-class precision/recall/F1 — the honest metric under imbalance.
+
+    Raw agreement is inflated by the silence prior (synthetic pools are ~88% silence, so an
+    all-silence model already scores ~0.88). speech_f1/recall reveal whether the student
+    actually DETECTS speech vs. just learned the prior.
+    """
+    s = (student_probs > threshold)
+    t = (teacher_probs > threshold)
+    tp = float((s & t).float().sum())
+    fp = float((s & ~t).float().sum())
+    fn = float((~s & t).float().sum())
+    prec = tp / (tp + fp + eps)
+    rec = tp / (tp + fn + eps)
+    f1 = 2 * prec * rec / (prec + rec + eps)
+    return {
+        "agreement": round(float((s == t).float().mean()), 4),
+        "speech_precision": round(prec, 4),
+        "speech_recall": round(rec, 4),
+        "speech_f1": round(f1, 4),
+        "teacher_speech_frac": round(float(t.float().mean()), 4),
+    }

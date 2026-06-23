@@ -41,6 +41,9 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out-dir", default="checkpoints")
     ap.add_argument("--skip-stage2", action="store_true")
+    ap.add_argument("--stage1-steps", type=int, default=None, help="override stage1 steps")
+    ap.add_argument("--stage2-steps", type=int, default=None, help="override stage2 steps")
+    ap.add_argument("--batch-size", type=int, default=None, help="override batch_size (both stages)")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -55,10 +58,18 @@ def main() -> None:
     summary = {"model_params": model.count_by_module()}
 
     s1_cfg = load_yaml(args.stage1)
+    if args.stage1_steps is not None:
+        s1_cfg["steps"] = args.stage1_steps
+    if args.batch_size is not None:
+        s1_cfg["batch_size"] = args.batch_size
     summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1")
 
     if not args.skip_stage2:
         s2_cfg = load_yaml(args.stage2)
+        if args.stage2_steps is not None:
+            s2_cfg["steps"] = args.stage2_steps
+        if args.batch_size is not None:
+            s2_cfg["batch_size"] = args.batch_size
         init = str(Path(args.out_dir) / "stage1_final.pt")
         summary["stage2"] = trainer.run_stage(s2_cfg, stage_name="stage2", init_from=init)
 
