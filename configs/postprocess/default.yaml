@@ -1,0 +1,9 @@
+# Default post-processing (balanced). Calibrated profiles are written by
+# scripts/calibrate_postproc.py to configs/postprocess/{low_latency,balanced,high_precision}.yaml
+profile: default
+onset_threshold: 0.5       # prob to declare speech start
+offset_threshold: 0.35     # hysteresis: prob below which silence counting begins (< onset)
+min_speech_ms: 100         # drop speech segments shorter than this (offline segment cleaner)
+min_silence_ms: 50         # silence must persist this long before declaring speech end
+speech_pad_ms: 30          # tail kept as speech (avoids clipping); adds to end-holdoff
+chunk_ms: 32.0
