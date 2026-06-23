@@ -74,6 +74,23 @@ def test_gssm_state_shapes():
     assert not torch.allclose(s0, s1)
 
 
+def test_gssm_initial_state_affects_output():
+    """With long memory (dA≈1) and a constant nonzero input (so C is constant, nonzero),
+    a different initial state must change the G-SSM output y. This isolates state→output
+    sensitivity from the full model's frontend/encoder/head."""
+    m = _make()
+    with torch.no_grad():
+        m.A_log.fill_(-8.0)               # dA≈1, near-perfect memory
+    x = torch.ones(1, 4, D_MODEL)          # constant nonzero input -> C constant, nonzero
+    y0, s0 = m(x, torch.zeros(1, D_INNER, D_STATE))
+    y1, s1 = m(x, torch.full((1, D_INNER, D_STATE), 5.0))
+    out_diff = (y0 - y1).abs().max().item()
+    state_diff = (s0 - s1).abs().max().item()
+    print(f"\ngssm state->output: y diff={out_diff:.4e}  state diff={state_diff:.4f}")
+    assert state_diff > 0.5, "initial state did not propagate into new_state"
+    assert out_diff > 1e-3, "initial state did not affect the G-SSM output"
+
+
 def test_gssm_streaming_equivalence():
     """offline over T == T sequential T=1 online steps carrying state (within 1e-5).
 
