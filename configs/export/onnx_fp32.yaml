@@ -1,0 +1,8 @@
+# FP32 ONNX export settings.
+variant: fp32
+opset: 17
+dynamic_batch: true          # batch axis dynamic; chunk=576, state=[B,256,16] fixed otherwise
+input_names: [chunk, state]
+output_names: [prob, new_state]
+out_path: dist/clearvad_base.onnx
+exporter: legacy             # prefer TorchScript exporter (predictable loop unrolling)

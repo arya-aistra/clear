@@ -1,0 +1,25 @@
+# INT8 static quantization settings.
+variant: int8
+source: dist/clearvad_base.onnx
+out_path: dist/clearvad_lite.onnx
+
+quant_format: QOperator        # operator-level (QLinearConv / QGemm), per spec
+activation_type: QInt8
+weight_type: QInt8
+per_channel: true
+calibrate_method: MinMax
+weight_symmetric: true
+activation_symmetric: false
+
+# Quantize ONLY these op types; the G-SSM recurrence (Exp/Mul/Add/ReduceSum/Softplus/Sigmoid)
+# stays FP32 for stability — the lesson from Silero's INT8 ConvInteger failure (Phase 0).
+op_types_to_quantize: [Conv, Gemm, MatMul]
+
+calibration:
+  source: synthetic            # streamed through FP32 model; states carried as in deployment
+  n_chunks: 1000
+
+gates:
+  size_mb_max: 1.5
+  size_vs_silero_min: 2.0      # >= 2-3x smaller than Silero (1.29 MB)
+  f1_degradation_pp_max: 2.0

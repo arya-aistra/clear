@@ -1,0 +1,6 @@
+# FP16 ONNX conversion settings.
+variant: fp16
+source: dist/clearvad_base.onnx
+out_path: dist/clearvad_fp16.onnx
+keep_io_types: true          # keep float32 I/O; convert internal compute to fp16
+note: "FP16 is faster only on CPUs with native fp16 support; INT8 is the deployment target."
