@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clearvad"
+version = "0.0.1.dev0"
+description = "ClearVAD: a compact, CPU-deployable SSM-based Voice Activity Detector distilled from Silero VAD v5."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "ClearVAD authors" }]
+keywords = ["vad", "voice-activity-detection", "ssm", "onnx", "speech", "distillation"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+# Runtime dependency floor for the *inference* package (the pip-installable lib).
+# Heavy training deps (torch, silero-vad teacher) live in requirements.txt and are
+# NOT required to run the exported ONNX model. This keeps the serving image lean.
+dependencies = [
+    "numpy>=1.23",
+    "onnxruntime>=1.17",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Everything needed to TRAIN / distill / export (the GPU server side).
+train = [
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "scipy>=1.10",
+    "onnx>=1.15",
+    "onnxconverter-common>=1.14",
+    "silero-vad>=5.1",
+    "soundfile>=0.12",
+    "hydra-core>=1.3",
+]
+# FastAPI serving layer.
+serve = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.5",
+    "python-multipart>=0.0.9",
+    "soundfile>=0.12",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.scripts]
+clearvad-serve = "clearvad.serve.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["clearvad*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "requires_silero: test needs the silero-vad teacher package + network (skipped if unavailable)",
+    "requires_torch: test needs PyTorch installed",
+    "slow: long-running test (benchmarks)",
+]

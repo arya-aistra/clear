@@ -1,0 +1,32 @@
+# ClearVAD — full training / distillation / export environment (GPU server side).
+# Inference-only deployment uses the much smaller set in pyproject [project.dependencies].
+#
+# Install on the remote Jupyter/GPU server:
+#   pip install -r requirements.txt
+#
+# NOTE on ONNX Runtime: we deliberately use the CPU build (`onnxruntime`), NOT
+# `onnxruntime-gpu`. All ClearVAD latency claims are CPU-only. Training uses torch+CUDA;
+# ONNX inference benchmarking uses the CPU ORT build. Do not install onnxruntime-gpu in
+# this env or the CPU latency numbers become untrustworthy.
+
+torch>=2.1
+torchaudio>=2.1
+numpy>=1.23
+scipy>=1.10
+pyyaml>=6.0
+hydra-core>=1.3
+
+# Teacher + audio IO
+silero-vad>=5.1
+soundfile>=0.12
+
+# ONNX export / quantize / validate (CPU runtime)
+onnx>=1.15
+onnxruntime>=1.17
+onnxconverter-common>=1.14
+
+# Serving (kept here too so the GPU box can run the API for integration tests)
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.5
+python-multipart>=0.0.9

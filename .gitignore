@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Generated artifacts (kept out of git; produced by scripts on the server)
+checkpoints/*.pt
+checkpoints/*.ckpt
+dist/*.onnx
+dist/*.whl
+experiments/*/
+*.wav
+*.flac
+
+# Reports are generated but we DO want to commit the markdown/json/csv summaries.
+# Ignore only large raw dumps:
+reports/**/*.npy
+reports/**/*.npz
+
+# Hydra
+outputs/
+.hydra/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep placeholder dirs
+!**/.gitkeep

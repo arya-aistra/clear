@@ -1,0 +1,70 @@
+# ClearVAD — FROZEN evaluation protocol.
+# Every model comparison in every phase MUST use these settings. Changing anything here
+# invalidates cross-phase comparisons (GSD benchmark discipline). Versioned in git.
+
+protocol_version: 1
+seed: 1234
+
+audio:
+  sample_rate: 16000
+  chunk_samples: 512        # 32 ms per chunk @ 16 kHz
+  chunk_ms: 32.0
+  context_samples: 64       # left context Silero v5 prepends internally (4 ms)
+  drop_last_partial_chunk: true
+  rms_normalize_dbfs: -23.0 # standardize input loudness before scoring
+
+# Ground-truth source for the benchmark.
+# Two supported modes; we use `silero_pseudolabel` until a real labeled set is provided.
+dataset:
+  # mode "silero_pseudolabel": run Silero over real speech (e.g. LibriSpeech clean) to
+  #   produce frame labels at threshold 0.5. This measures *agreement/transfer*, NOT
+  #   absolute accuracy (the labels ARE the teacher). Honest framing: this is how we
+  #   verify the DFKD student reproduces the teacher on REAL audio (Claim 2 transfer test).
+  # mode "manual": a self-recorded / hand-labeled set with a label .json (RTTM-like).
+  mode: silero_pseudolabel
+  manual:
+    audio_dir: data/eval/manual/audio        # *.wav, mono preferred
+    label_dir: data/eval/manual/labels       # matching *.json: {"speech": [[start_s, end_s], ...]}
+  silero_pseudolabel:
+    audio_dir: data/eval/librispeech          # real speech for transfer measurement
+    max_files: 200
+    teacher_threshold: 0.5
+  # Synthetic transition probes (generated, no download). Used for endpoint/short-silence.
+  synthetic_probes:
+    enabled: true
+    seed: 1234
+
+# Metric thresholds and sweep grid (used to draw FAR/MR operating curves).
+metrics:
+  primary_threshold: 0.5
+  threshold_sweep: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+  report:
+    - f1
+    - far
+    - mr
+    - auc
+    - onset_latency_mean_ms
+    - endpoint_latency_mean_ms
+    - rtf
+
+# Post-processing applied for the "fair" comparison column. The "raw" column uses none.
+# Defaults match the GSD spec (Phase 0); calibrated values arrive in Phase 6.
+postprocess:
+  default:
+    onset_threshold: 0.5
+    offset_threshold: 0.5     # symmetric default == Silero-style (Phase 6 makes it asymmetric)
+    min_speech_ms: 250
+    min_silence_ms: 100
+    speech_pad_ms: 0
+
+# CPU latency benchmark settings (single-thread, ONNX Runtime).
+latency:
+  backend: onnxruntime
+  intra_op_threads: 1
+  inter_op_threads: 1
+  warmup_chunks: 200
+  measure_chunks: 10000
+  report_percentiles: [50, 90, 99]
+
+# Short-silence probe set: silences of these durations injected between speech bursts.
+short_silence_probe_ms: [50, 100, 150, 200, 300]
