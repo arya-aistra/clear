@@ -43,6 +43,9 @@ class ClearVADConfig:
     gssm_d_state: int = 16
     gssm_dt_rank: int = 8
     gssm_tie_projections: bool = False
+    gssm_input_norm: bool = False   # LayerNorm before the G-SSM: bounds activation magnitude
+                                    # -> bounds the input-dependent Δ -> less "sticky" memory
+                                    # (the Phase 2 finding; an anti-stickiness lever)
     # head
     head_reduction: str = "mean"
 
@@ -67,6 +70,7 @@ class ClearVADConfig:
             gssm_d_state=gs.get("d_state", 16),
             gssm_dt_rank=gs.get("dt_rank", 8),
             gssm_tie_projections=gs.get("tie_projections", False),
+            gssm_input_norm=gs.get("input_norm", False),
             head_reduction=hd.get("reduction", "mean"),
         )
 
@@ -89,6 +93,8 @@ class ClearVADModel(nn.Module):
             depthwise_separable=cfg.encoder_depthwise_separable,
             kernel_size=cfg.encoder_kernel_size,
         )
+        self.pre_gssm_norm = (nn.LayerNorm(cfg.gssm_d_model) if cfg.gssm_input_norm
+                              else nn.Identity())
         self.gssm = GSSM(
             d_model=cfg.gssm_d_model,
             d_inner=cfg.gssm_d_inner,
@@ -133,7 +139,8 @@ class ClearVADModel(nn.Module):
         """[B, 576] -> encoder features [B, T_enc, C] (frontend + encoder, per-chunk)."""
         mag = self.frontend(chunk)          # [B, 129, L]
         enc = self.encoder(mag)             # [B, 128, L]
-        return enc.transpose(1, 2)          # [B, L, 128]
+        feats = enc.transpose(1, 2)         # [B, L, 128]
+        return self.pre_gssm_norm(feats)    # LayerNorm (or Identity) before the G-SSM
 
     def forward(self, chunk: Tensor, state: Optional[Tensor] = None,
                 return_logit: bool = False) -> Tuple[Tensor, Tensor]:
