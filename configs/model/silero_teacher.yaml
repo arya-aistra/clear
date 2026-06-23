@@ -1,0 +1,27 @@
+# Silero v5 teacher configuration (used by the DFKD trainer in Phase 3).
+name: silero_teacher
+
+backend: jit          # 'jit' (TorchScript) or 'onnx'
+onnx: false
+sample_rate: 16000
+chunk_samples: 512
+context_samples: 64
+
+# Measured ground truth from Phase 0 dissection (reports/silero_dissection.md):
+measured:
+  jit_params_16k_plus_8k: 462594
+  onnx_params_16k: 309633
+  onnx_size_mb: 1.2896
+  state_shape: [2, 1, 128]      # combined h,c
+  context_shape: [1, 64]
+  io:
+    input: [batch, sequence]    # external feed = 512 samples
+    state: [2, batch, 128]
+    sr: scalar_int64
+    output: [batch, 1]
+    stateN: [2, batch, 128]
+
+# Distillation soft-label settings (teacher side)
+distill:
+  temperature: 2.0
+  threshold: 0.5
