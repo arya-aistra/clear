@@ -36,19 +36,22 @@ def test_full_model_none_state_ok():
 
 
 def test_full_model_state_carry():
-    """A non-zero input state must propagate to both the output prob and the new state.
+    """A different initial state must change both the output prob and the new state.
 
-    We feed a SILENT chunk to isolate the state's effect: with input u≈0, the selective
-    Δ falls back to softplus(bias) (small), so dA = exp(Δ·A) ≈ 0.99 and the initial state
-    persists/propagates to the output. (With a noisy chunk on an untrained model, large
-    activations drive Δ large → dA→0 → the state is forgotten within one frame, which is
-    correct dynamics but makes the plumbing untestable. Exact carry across chunks is
-    independently proven by test_full_model_streaming_equivalence.)"""
+    Selective-SSM subtlety on an *untrained* model: B and C are input-dependent, so with a
+    silent chunk C≈0 hides the state, and with a noisy chunk many channels have large Δ so
+    dA→0 forgets the state within the 3-frame chunk — either way the state's effect on the
+    scalar prob is below fp precision. To test the *wiring* honestly we force a long-memory
+    configuration (A≈0 ⇒ dA≈1, perfect retention); then a noisy chunk (C≠0) makes the state
+    observable at the output. Exact cross-chunk carry math is covered by Phase 1's
+    test_gssm_streaming_equivalence under the same regime.
+    """
     m = _model()
-    silent = torch.zeros(1, TOTAL_INPUT_SAMPLES)
-    big_state = torch.full((1, D_INNER, D_STATE), 4.0)
-    p_fresh, s_fresh = m(silent, None)
-    p_carry, s_carry = m(silent, big_state)
+    with torch.no_grad():
+        m.gssm.A_log.fill_(-8.0)  # A = -exp(-8) ≈ 0  ->  dA ≈ 1  ->  near-perfect memory
+    chunk = torch.randn(1, TOTAL_INPUT_SAMPLES)
+    p_fresh, s_fresh = m(chunk, m.reset_state(1))
+    p_carry, s_carry = m(chunk, torch.full((1, D_INNER, D_STATE), 5.0))
     assert (p_carry - p_fresh).abs().item() > 1e-4, "input state did not affect output prob"
     assert not torch.allclose(s_carry, s_fresh, atol=1e-4), "input state did not affect new state"
 
@@ -65,6 +68,8 @@ def test_full_model_state_reset_zero_equals_none():
 def test_full_model_streaming_equivalence():
     """Chunked streaming (carry G-SSM state) == offline (concat features, one G-SSM pass)."""
     m = _model().double().eval()
+    with torch.no_grad():
+        m.gssm.A_log.fill_(-8.0)  # dA≈1 so cross-chunk carry is genuinely exercised
     B, K = 2, 6
     chunks = [torch.randn(B, TOTAL_INPUT_SAMPLES, dtype=torch.float64) for _ in range(K)]
 

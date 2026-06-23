@@ -75,8 +75,14 @@ def test_gssm_state_shapes():
 
 
 def test_gssm_streaming_equivalence():
-    """offline over T == T sequential T=1 online steps carrying state (within 1e-5)."""
+    """offline over T == T sequential T=1 online steps carrying state (within 1e-5).
+
+    Force long memory (A≈0 ⇒ dA≈1) so state genuinely flows across steps — otherwise an
+    untrained model can forget state within the window and the equivalence would hold even
+    if carry were broken, making the test trivial."""
     m = _make().double()  # float64 to assert tight numerical equivalence
+    with torch.no_grad():
+        m.A_log.fill_(-8.0)
     B, T = 3, 32
     x = torch.randn(B, T, D_MODEL, dtype=torch.float64)
 
