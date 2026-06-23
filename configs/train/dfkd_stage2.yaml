@@ -1,0 +1,32 @@
+# DFKD Stage 2 — boundary + smoothness refinement. Init from stage1_final.pt.
+stage: stage2
+seed: 1234
+
+steps: 20000
+batch_size: 256
+chunks_per_sample: 64
+lr: 1.0e-4
+weight_decay: 1.0e-4
+
+# all three losses active (boundary upweighted for crisp endpoints)
+lambda_soft: 1.0
+lambda_boundary: 2.0
+lambda_smooth: 0.5
+temperature: 2.0
+boundary_width: 3        # ±3 frames around a teacher decision change
+boundary_weight: 5.0
+
+pool_size: 4096
+refresh_every: 2500
+label_batch: 256
+
+# higher proportion of transitions to sharpen onset/endpoint behavior
+category_weights:
+  noise: 0.20
+  speech: 0.20
+  transition: 0.45
+  hardneg: 0.15
+
+log_every: 50
+agree_every: 1000
+ckpt_every: 5000

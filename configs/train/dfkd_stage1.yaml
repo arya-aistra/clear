@@ -1,0 +1,32 @@
+# DFKD Stage 1 — soft-label alignment only (L_soft). Student learns the teacher's surface.
+stage: stage1
+seed: 1234
+
+steps: 50000
+batch_size: 256          # spec=256; reduce to 128/64 if GPU OOM (explicit-loop SSM is memory-heavy)
+chunks_per_sample: 64    # ~2 s of audio per training sample
+lr: 3.0e-4
+weight_decay: 1.0e-4
+
+# loss weights — Stage 1: only soft labels
+lambda_soft: 1.0
+lambda_boundary: 0.0
+lambda_smooth: 0.0
+temperature: 2.0
+
+# synthetic data pool
+pool_size: 4096
+refresh_every: 2500      # regenerate + re-label the pool for diversity
+label_batch: 256
+
+# balanced category mix
+category_weights:
+  noise: 0.30
+  speech: 0.30
+  transition: 0.25
+  hardneg: 0.15
+
+# logging / checkpoints
+log_every: 50
+agree_every: 1000
+ckpt_every: 5000

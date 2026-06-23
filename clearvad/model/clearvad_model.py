@@ -135,16 +135,37 @@ class ClearVADModel(nn.Module):
         enc = self.encoder(mag)             # [B, 128, L]
         return enc.transpose(1, 2)          # [B, L, 128]
 
-    def forward(self, chunk: Tensor, state: Optional[Tensor] = None
-                ) -> Tuple[Tensor, Tensor]:
+    def forward(self, chunk: Tensor, state: Optional[Tensor] = None,
+                return_logit: bool = False) -> Tuple[Tensor, Tensor]:
         feats = self.features(chunk)                 # [B, T_enc, C]
         y, new_state = self.gssm(feats, state)       # [B, T_enc, C], [B, E, N]
-        prob = self.head(y)                          # [B, 1]
-        return prob, new_state
+        out = self.head(y, return_logit=return_logit)  # [B, 1]
+        return out, new_state
 
     def streaming_step(self, chunk: Tensor, state: Optional[Tensor] = None
                        ) -> Tuple[Tensor, Tensor]:
         return self.forward(chunk, state)
+
+    def forward_sequence(self, windows: Tensor, return_logit: bool = True) -> Tensor:
+        """Efficient training forward over a sequence of chunks.
+
+        windows: [B, K, 576] — K consecutive 576-sample student windows (each = 64-sample
+        left context + 512 chunk). Computes per-chunk encoder features, runs the G-SSM ONCE
+        over the concatenated feature sequence (state flows across chunks, == streaming by
+        the equivalence property), then the head per chunk.
+
+        Returns [B, K] — per-chunk logit (or prob if return_logit=False).
+        """
+        if windows.dim() != 3:
+            raise ValueError(f"forward_sequence expects [B,K,576]; got {tuple(windows.shape)}")
+        B, K, S = windows.shape
+        feats = self.features(windows.reshape(B * K, S))   # [B*K, T_enc, C]
+        t_enc, C = feats.shape[1], feats.shape[2]
+        feats = feats.reshape(B, K * t_enc, C)             # [B, K*T_enc, C]
+        y, _ = self.gssm(feats, None)                      # [B, K*T_enc, C]
+        y = y.reshape(B * K, t_enc, C)
+        out = self.head(y, return_logit=return_logit)      # [B*K, 1]
+        return out.reshape(B, K)
 
     # ------------------------------------------------------------ introspection
     def parameter_count(self) -> int:

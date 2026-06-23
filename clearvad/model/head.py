@@ -24,16 +24,23 @@ class VADHead(nn.Module):
         self.reduction = reduction
         self.conv = nn.Conv1d(in_channels, 1, kernel_size=1)
 
-    def forward(self, feats: Tensor) -> Tensor:
-        """feats: [B, T, C] -> prob [B, 1]."""
+    def forward(self, feats: Tensor, return_logit: bool = False) -> Tensor:
+        """feats: [B, T, C] -> prob [B, 1] (or logit [B, 1] if return_logit).
+
+        Reduces the chunk's per-frame logits to one logit (mean/last) BEFORE sigmoid, so a
+        clean pre-sigmoid logit is available for temperature-scaled distillation (Phase 3).
+        """
         if feats.dim() != 3:
             raise ValueError(f"head expects [B,T,C]; got {tuple(feats.shape)}")
         x = feats.transpose(1, 2)            # [B, C, T]
-        logits = self.conv(x)                # [B, 1, T]
-        probs = torch.sigmoid(logits).squeeze(1)  # [B, T]
+        logits = self.conv(x).squeeze(1)     # [B, T]
         if self.reduction == "mean":
-            return probs.mean(dim=1, keepdim=True)    # [B, 1]
-        return probs[:, -1:]                          # [B, 1]
+            logit = logits.mean(dim=1, keepdim=True)   # [B, 1]
+        else:
+            logit = logits[:, -1:]                     # [B, 1]
+        if return_logit:
+            return logit
+        return torch.sigmoid(logit)
 
     def parameter_count(self) -> int:
         return int(sum(p.numel() for p in self.parameters()))
