@@ -161,14 +161,31 @@ class SileroVAD:
         (the prepended left-context samples, shape ~[B, 64]).
         """
         state: Dict[str, Any] = {"backend": self._backend}
-        for attr in ("_state", "_context", "_last_sr", "_last_batch_size"):
-            val = getattr(self._model, attr, None)
-            if val is not None:
-                key = attr.lstrip("_")
-                try:
-                    state[key] = val.detach().cpu().clone() if hasattr(val, "detach") else val
-                except Exception:  # noqa: BLE001
-                    state[key] = val
+        m = self._model
+
+        def _store(key, val):
+            if val is None:
+                return
+            try:
+                state[key] = val.detach().cpu().clone() if hasattr(val, "detach") else val
+            except Exception:  # noqa: BLE001
+                state[key] = val
+
+        # 1. direct attributes (ONNX wrapper exposes these; some JIT versions too)
+        for attr in ("_state", "_context", "_h", "_c", "_last_sr", "_last_batch_size"):
+            _store(attr.lstrip("_"), getattr(m, attr, None))
+
+        # 2. registered buffers (the v5 JIT often keeps recurrent state as buffers
+        #    nested inside submodules, invisible to top-level getattr).
+        named_buffers = getattr(m, "named_buffers", None)
+        if callable(named_buffers):
+            try:
+                for name, buf in named_buffers():
+                    low = name.lower()
+                    if any(k in low for k in ("state", "context", "hidden", "cell", "_h", "_c")):
+                        _store(f"buf:{name}", buf)
+            except Exception:  # noqa: BLE001
+                pass
         return state
 
     def describe(self) -> Dict[str, Any]:
