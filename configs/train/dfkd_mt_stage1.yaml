@@ -17,8 +17,8 @@ pos_weight: 2.0
 
 real_fraction: 0.7
 snr_range: [0.0, 20.0]
-pool_size: 3072            # larger pool, labeled once (Pyannote is heavy)
-refresh_every: 100000000   # effectively never re-label
+pool_size: 2048
+refresh_every: 2000        # REFRESH the pool (frozen pool overfit badly; Pyannote-on-GPU labels fast enough)
 label_batch: 128
 category_weights:
   noise: 0.35

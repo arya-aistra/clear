@@ -19,8 +19,8 @@ pos_weight: 2.0
 
 real_fraction: 0.5
 snr_range: [0.0, 20.0]
-pool_size: 3072
-refresh_every: 100000000
+pool_size: 2048
+refresh_every: 2000        # REFRESH (frozen pool overfit in the first MT attempt)
 label_batch: 128
 category_weights:
   noise: 0.20
