@@ -6,19 +6,20 @@ reproducible evaluation protocol before building anything.
 **Hypothesis:** Silero v5 has reproducible weaknesses (endpoint delay, short-silence misses, INT8
 instability) that a distilled SSM student can target; baseline CPU latency ≈ 0.3 ms/chunk.
 
-## Acceptance gates
+## Acceptance gates — ALL PASSED (server run 2026-06-23)
 
 | Gate | How it's satisfied | Status |
 |------|--------------------|--------|
-| Dissection document complete | `scripts/dissect_silero.py` → `reports/silero_dissection.md` | ⏳ pending server run |
-| Baseline CPU latency measured & logged | `scripts/benchmark_silero.py` → `reports/phase0_baseline.json` | ⏳ pending server run |
-| Failure modes reproducible | `scripts/silero_failures.py` → `reports/silero_failures.md` | ⏳ pending server run |
-| Evaluation protocol fixed in config | `configs/eval/benchmark.yaml` (frozen, committed) | ✅ done |
-| Wrapper tests pass | `pytest -q` (pure + `requires_silero`) | ⏳ pending server run |
-| `reports/phase0_baseline.json` saved | written by benchmark script | ⏳ pending server run |
+| Dissection document complete | `reports/silero_dissection.md` (shapes/ops/params measured) | ✅ PASS |
+| Baseline CPU latency measured & logged | `reports/phase0_baseline.json` (0.0774 ms e2e / 0.0538 ms pure-ORT) | ✅ PASS |
+| Failure modes reproducible | `reports/silero_failures.md` (+ `findings.md` reconciliation) | ✅ PASS |
+| Evaluation protocol fixed in config | `configs/eval/benchmark.yaml` (frozen, committed) | ✅ PASS |
+| Wrapper tests pass | `pytest -q` → 22 passed, 1 skipped (state-carry, backend hides state) | ✅ PASS |
+| `reports/phase0_baseline.json` saved | written by benchmark script | ✅ PASS |
 
-**Code-side status:** all Phase 0 modules/scripts/tests written and byte-compile cleanly.
-Numbers are produced on the server. This file's table gets its ✅/❌ filled from pasted output.
+**Status: PHASE 0 PASSED.** All gates met. See `findings.md` for the spec reconciliation and the
+narrative-shifting results (Silero raw is already fast/crisp; endpoint & short-silence "failures"
+are post-processing artifacts; CPU-speed-beating is off the table; size/INT8/data-free survive).
 
 ## Commands to run on the server
 
