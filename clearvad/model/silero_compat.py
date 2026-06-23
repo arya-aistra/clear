@@ -140,11 +140,15 @@ class SileroVAD:
         return self.forward(chunk)
 
     def reset_states(self, batch_size: int = 1) -> None:
-        """Reset Silero's recurrent state (and left-context buffer)."""
+        """Reset Silero's recurrent state (and left-context buffer).
+
+        The v5 JIT backend's ``reset_states()`` takes no argument (it infers batch size
+        from the next input) and raises ``RuntimeError`` on extra args; the ONNX wrapper
+        accepts ``batch_size``. Try with-arg first, fall back to no-arg.
+        """
         try:
             self._model.reset_states(batch_size)
-        except TypeError:
-            # Some versions take no argument.
+        except (TypeError, RuntimeError):
             self._model.reset_states()
         self._last_batch_size = batch_size
 
