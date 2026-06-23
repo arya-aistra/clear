@@ -19,12 +19,12 @@ from clearvad import CHUNK_MS
 from clearvad.evaluation.metrics import binary_frame_metrics, endpoint_latency_ms, frames_to_segments
 from clearvad.postprocess.smoother import HysteresisSmoother
 
-MODE_GRIDS = {
-    "balanced":       dict(onset=[0.4, 0.5, 0.6, 0.7], min_silence_ms=[40, 60, 100], pad=[30]),
-    "high_precision": dict(onset=[0.5, 0.6, 0.7, 0.8], min_silence_ms=[60, 100, 150], pad=[30]),
-    "low_latency":    dict(onset=[0.4, 0.5, 0.6], min_silence_ms=[0, 20, 40], pad=[0]),
-}
+# One broad grid for ALL modes; the mode-specific COST (not the grid) decides the operating
+# point. (A larger min_silence bridges silence gaps -> raises FAR, so high_precision must be
+# free to choose min_silence=0 — hence a shared grid rather than per-mode restricted grids.)
+GRID = dict(onset=[0.4, 0.5, 0.6, 0.7, 0.8], min_silence_ms=[0, 20, 40, 60, 100], pad=[0, 30])
 HYST_GAP = [0.0, 0.1, 0.15, 0.2]  # onset - offset
+MODES = ("balanced", "high_precision", "low_latency")
 
 
 def evaluate_params(probs_list, labels_list, params: Dict, chunk_ms: float = CHUNK_MS) -> Dict:
@@ -62,15 +62,14 @@ def _cost(mode: str, m: Dict) -> float:
 def calibrate(probs_list: Sequence, labels_list: Sequence, mode: str = "balanced",
               chunk_ms: float = CHUNK_MS) -> Dict:
     """Grid-search the smoother for `mode`. Returns best params + metrics + cost."""
-    if mode not in MODE_GRIDS:
-        raise ValueError(f"mode must be one of {list(MODE_GRIDS)}")
-    grid = MODE_GRIDS[mode]
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}")
     best = None
-    for onset in grid["onset"]:
+    for onset in GRID["onset"]:
         for gap in HYST_GAP:
             offset = round(max(0.05, onset - gap), 3)
-            for min_sil in grid["min_silence_ms"]:
-                for pad in grid["pad"]:
+            for min_sil in GRID["min_silence_ms"]:
+                for pad in GRID["pad"]:
                     params = dict(onset_threshold=onset, offset_threshold=offset,
                                   min_silence_ms=min_sil, speech_pad_ms=pad,
                                   min_speech_ms=100.0)
@@ -83,4 +82,4 @@ def calibrate(probs_list: Sequence, labels_list: Sequence, mode: str = "balanced
 
 
 def calibrate_all_modes(probs_list, labels_list, chunk_ms: float = CHUNK_MS) -> Dict[str, Dict]:
-    return {mode: calibrate(probs_list, labels_list, mode, chunk_ms) for mode in MODE_GRIDS}
+    return {mode: calibrate(probs_list, labels_list, mode, chunk_ms) for mode in MODES}

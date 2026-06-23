@@ -96,11 +96,17 @@ def main() -> None:
     write_json(report, args.out)
 
     cl = comparison["clearvad_low_latency"]; sd = comparison["silero_default"]
+    se = comparison["silero_low_latency_profile"]
     gap = sd["endpoint_latency_mean_ms"] - cl["endpoint_latency_mean_ms"]
     LOG.info("ENDPOINT: ClearVAD low_latency=%.1fms  vs  Silero default=%.1fms  (%.1fms faster)",
              cl["endpoint_latency_mean_ms"], sd["endpoint_latency_mean_ms"], gap)
     LOG.info("FAR/MR: ClearVAD low_latency FAR=%.3f MR=%.3f | Silero default FAR=%.3f MR=%.3f",
              cl["far"], cl["mr"], sd["far"], sd["mr"])
+    # EQUAL-FOOTING honesty: both models under ClearVAD's low_latency profile
+    LOG.info("EQUAL-FOOTING (same low_latency profile): "
+             "ClearVAD endpoint=%.1fms FAR=%.3f | Silero endpoint=%.1fms FAR=%.3f",
+             cl["endpoint_latency_mean_ms"], cl["far"],
+             se["endpoint_latency_mean_ms"], se["far"])
     LOG.info("Wrote %s and configs/postprocess/{low_latency,balanced,high_precision}.yaml", args.out)
 
 
