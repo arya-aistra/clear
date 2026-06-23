@@ -40,3 +40,16 @@ head, smallest), `silero_teacher.yaml` (teacher + measured dissection facts).
 frontend shape/magnitude/basis/params · encoder shape/T-preservation/dwsep<plain/grad ·
 full-model shape/state-carry/zero==None/**streaming==offline <1e-5**/params<300K/lite<base/
 **ONNX export+ORT match**/from_config.
+
+## ⚠️ Finding carried to Phase 3 — SSM memory ∝ 1/activation-magnitude
+While debugging the state-carry test we observed: with a *noisy* input chunk on the
+untrained model, a large injected initial state had **zero** effect on the output (diff =
+1 float32 ULP). Cause: large encoder activations → large input-dependent Δ → `dA=exp(Δ·A)`
+collapses to ~0 → the SSM forgets its state within one frame. With a **silent** chunk,
+Δ→softplus(bias)~small → dA≈0.99 → state persists (the test now uses a silent chunk).
+
+Implication: **effective memory length is coupled to activation magnitude.** A VAD must
+hold state across speech/silence over time, so during DFKD (Phase 3) we should watch the
+learned Δ distribution and consider a **LayerNorm/scale on the encoder→G-SSM input** to keep
+Δ (hence memory) in a useful range. Not changing the architecture now (faithful to spec);
+flagged as a training knob + ablation candidate.
