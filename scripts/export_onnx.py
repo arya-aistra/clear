@@ -112,9 +112,14 @@ def main() -> None:
     # ---- benchmark ----
     if not args.skip_bench:
         for tag, path in (("fp32", fp32), ("fp16", fp16), ("int8", int8)):
-            if Path(path).exists():
+            if not Path(path).exists() or report.get(tag, {}).get("error"):
+                continue
+            try:
                 LOG.info("Benchmarking %s...", tag)
                 report.setdefault("benchmark", {})[tag] = benchmark(path, measure=args.bench_chunks)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("benchmark %s failed: %r", tag, exc)
+                report.setdefault("benchmark", {})[tag] = {"error": repr(exc)}
 
     # ---- gate check ----
     int8_size = report["int8"]["size_mb"]

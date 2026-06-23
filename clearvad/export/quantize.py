@@ -23,14 +23,29 @@ QUANT_OP_TYPES = ["Conv", "Gemm", "MatMul"]
 
 
 # --------------------------------------------------------------------- FP16
+# Keep the G-SSM recurrence + shape ops in FP32 so the converter inserts casts cleanly
+# (mixed fp16/fp32 around these ops otherwise yields type-mismatch errors at load).
+_FP16_BLOCK = ["Unsqueeze", "Slice", "Gather", "Shape", "ReduceSum", "ReduceMean",
+               "Softplus", "Range", "ConstantOfShape", "Pad"]
+
+
 def export_fp16(fp32_path: str, out_path: str) -> str:
+    """Best-effort FP16 conversion. Validates the result loads; raises (and cleans up) if not.
+    FP16 is NOT the deployment target (INT8 is) and is only faster on FP16-capable CPUs."""
     import onnx
+    import onnxruntime as ort
     from onnxconverter_common import float16
 
     model = onnx.load(fp32_path)
-    model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
+    block = list(set(getattr(float16, "DEFAULT_OP_BLOCK_LIST", []) or []) | set(_FP16_BLOCK))
+    model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True, op_block_list=block)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     onnx.save(model_fp16, out_path)
+    try:
+        ort.InferenceSession(out_path, providers=["CPUExecutionProvider"])
+    except Exception as exc:  # noqa: BLE001
+        Path(out_path).unlink(missing_ok=True)
+        raise RuntimeError(f"FP16 model failed to load: {exc}") from exc
     return out_path
 
 
@@ -97,7 +112,7 @@ def quantize_int8(fp32_path: str, out_path: str, calibration_samples,
     quant_pre_process(fp32_path, prep, skip_symbolic_shape=False)
     quantize_static(
         prep, out_path, _make_reader(calibration_samples),
-        quant_format=QuantFormat.QOperator,        # operator-level (QLinearConv, etc.) per spec
+        quant_format=QuantFormat.QDQ,              # QDQ = best INT8 perf on x64 CPU (ORT guidance)
         activation_type=QuantType.QInt8, weight_type=QuantType.QInt8,
         op_types_to_quantize=op_types,
         per_channel=per_channel,
