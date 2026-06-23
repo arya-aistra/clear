@@ -146,7 +146,8 @@ class ClearVADModel(nn.Module):
                        ) -> Tuple[Tensor, Tensor]:
         return self.forward(chunk, state)
 
-    def forward_sequence(self, windows: Tensor, return_logit: bool = True) -> Tensor:
+    def forward_sequence(self, windows: Tensor, return_logit: bool = True,
+                         scan_mode: str = "parallel") -> Tensor:
         """Efficient training forward over a sequence of chunks.
 
         windows: [B, K, 576] — K consecutive 576-sample student windows (each = 64-sample
@@ -154,7 +155,8 @@ class ClearVADModel(nn.Module):
         over the concatenated feature sequence (state flows across chunks, == streaming by
         the equivalence property), then the head per chunk.
 
-        Returns [B, K] — per-chunk logit (or prob if return_logit=False).
+        scan_mode='parallel' uses the log-depth associative scan (fast training); the result
+        is identical to the 'loop' (export) path. Returns [B, K] per-chunk logit/prob.
         """
         if windows.dim() != 3:
             raise ValueError(f"forward_sequence expects [B,K,576]; got {tuple(windows.shape)}")
@@ -162,7 +164,7 @@ class ClearVADModel(nn.Module):
         feats = self.features(windows.reshape(B * K, S))   # [B*K, T_enc, C]
         t_enc, C = feats.shape[1], feats.shape[2]
         feats = feats.reshape(B, K * t_enc, C)             # [B, K*T_enc, C]
-        y, _ = self.gssm(feats, None)                      # [B, K*T_enc, C]
+        y, _ = self.gssm(feats, None, scan_mode=scan_mode)  # [B, K*T_enc, C]
         y = y.reshape(B * K, t_enc, C)
         out = self.head(y, return_logit=return_logit)      # [B*K, 1]
         return out.reshape(B, K)

@@ -70,6 +70,21 @@ def test_stage1_only_soft_active():
     assert parts["soft"] > 0.0
 
 
+def test_pos_weight_upweights_speech_error():
+    """With pos_weight>1, an error on a speech frame must cost more than on a silence frame."""
+    # one speech frame, one silence frame; student is wrong on whichever we test
+    base = DFKDLoss(lambda_soft=1.0, lambda_boundary=0.0, lambda_smooth=0.0, pos_weight=1.0)
+    weighted = DFKDLoss(lambda_soft=1.0, lambda_boundary=0.0, lambda_smooth=0.0, pos_weight=8.0)
+
+    # teacher: frame0 speech (0.95), frame1 silence (0.05); student wrong on the SPEECH frame
+    teacher = torch.tensor([[0.95, 0.05]])
+    student_wrong_speech = torch.tensor([[-3.0, -3.0]])  # predicts silence on both
+    _, p_base = base(student_wrong_speech, teacher)
+    _, p_weighted = weighted(student_wrong_speech, teacher)
+    # upweighting the (erroneous) speech frame increases the soft loss
+    assert p_weighted["soft"] > p_base["soft"]
+
+
 def test_agreement_rate():
     s = torch.tensor([[0.9, 0.1, 0.8]])
     t = torch.tensor([[0.7, 0.2, 0.3]])

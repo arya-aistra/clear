@@ -44,20 +44,32 @@ class DataPool:
         self.probs: Optional[torch.Tensor] = None       # [P, K] cpu
         self.categories: List[str] = []
 
-    def refresh(self, seed: int, category_weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    def refresh(self, seed: int, category_weights: Optional[Dict[str, float]] = None,
+                real_source=None, real_fraction: float = 0.0, snr_range=(0.0, 20.0)
+                ) -> Dict[str, float]:
         torch_ = self.teacher.torch
-        audio_np, cats = self.gen.generate_batch(
-            self.pool_size, self.clip_samples, seed=seed, category_weights=category_weights)
+        rng = np.random.default_rng(seed)
+        n_real = int(round(self.pool_size * real_fraction)) if real_source else 0
+        n_syn = self.pool_size - n_real
+        parts_audio = []
+        if n_real > 0:
+            parts_audio.append(real_source.sample_clips(
+                n_real, self.clip_samples, rng, noise_gen=self.gen, snr_range=snr_range))
+        if n_syn > 0:
+            syn, _ = self.gen.generate_batch(
+                n_syn, self.clip_samples, seed=seed + 1, category_weights=category_weights)
+            parts_audio.append(syn)
+        audio_np = np.concatenate(parts_audio, axis=0)
+        audio_np = audio_np[rng.permutation(self.pool_size)]  # shuffle real/synthetic
         audio = torch_.from_numpy(audio_np)
         probs_chunks = []
         for i in range(0, self.pool_size, self.label_batch):
             probs_chunks.append(self.teacher.label(audio[i:i + self.label_batch]))
         self.audio = audio
         self.probs = torch_.cat(probs_chunks, dim=0)
-        self.categories = cats
-        # report teacher activation (fraction of frames labeled speech) — the DFKD health check
         speech_frac = float((self.probs > 0.5).float().mean())
-        return {"pool_seed": seed, "teacher_speech_frac": round(speech_frac, 4)}
+        return {"pool_seed": seed, "teacher_speech_frac": round(speech_frac, 4),
+                "n_real": n_real, "n_syn": n_syn}
 
     def sample(self, batch_size: int, rng: np.random.Generator, device):
         idx = rng.integers(0, self.pool_size, size=batch_size)
@@ -70,22 +82,38 @@ class DataPool:
 
 class DFKDTrainer:
     def __init__(self, model, teacher: SileroTeacher, generator: SyntheticAudioGenerator,
-                 device: str = "cuda", out_dir: str = "checkpoints") -> None:
+                 device: str = "cuda", out_dir: str = "checkpoints",
+                 real_source=None, use_amp: bool = True) -> None:
         self.model = model
         self.teacher = teacher
         self.gen = generator
-        self.device = device if torch.cuda.is_available() or device == "cpu" else "cpu"
+        self.real_source = real_source
+        self.device = device if (torch.cuda.is_available() or device == "cpu") else "cpu"
+        self.use_amp = use_amp and self.device == "cuda"
         self.model.to(self.device)
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.history: List[Dict[str, Any]] = []
         self._holdout = None  # (windows, teacher_probs) fixed eval batch
 
+    def _amp_ctx(self):
+        from contextlib import nullcontext
+        if self.use_amp:
+            return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+        return nullcontext()
+
     # ------------------------------------------------------------ eval helpers
     def _ensure_holdout(self, n: int = 64, clip_chunks: int = 64):
         if self._holdout is not None:
             return
-        audio_np, _ = self.gen.generate_batch(n, clip_chunks * CHUNK_SAMPLES, seed=999999)
+        import numpy as _np
+        rng = _np.random.default_rng(999999)
+        if self.real_source is not None:
+            # held-out batch from the real distribution (monitoring; not a separate split)
+            audio_np = self.real_source.sample_clips(
+                n, clip_chunks * CHUNK_SAMPLES, rng, noise_gen=self.gen)
+        else:
+            audio_np, _ = self.gen.generate_batch(n, clip_chunks * CHUNK_SAMPLES, seed=999999)
         audio = self.teacher.torch.from_numpy(audio_np)
         probs = self.teacher.label(audio)
         windows = self.teacher.build_student_windows(audio)
@@ -148,6 +176,8 @@ class DFKDTrainer:
         agree_every = int(cfg.get("agree_every", 1000))
         ckpt_every = int(cfg.get("ckpt_every", 5000))
         cat_weights = cfg.get("category_weights")
+        real_fraction = float(cfg.get("real_fraction", 0.0))
+        snr_range = tuple(cfg.get("snr_range", [0.0, 20.0]))
 
         criterion = DFKDLoss(
             lambda_soft=cfg.get("lambda_soft", 1.0),
@@ -156,6 +186,7 @@ class DFKDTrainer:
             temperature=cfg.get("temperature", 2.0),
             boundary_width=cfg.get("boundary_width", 3),
             boundary_weight=cfg.get("boundary_weight", 5.0),
+            pos_weight=cfg.get("pos_weight", 1.0),
         )
         opt = torch_.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)
         sched = torch_.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps)
@@ -164,18 +195,23 @@ class DFKDTrainer:
         rng = np.random.default_rng(int(cfg.get("seed", 1234)))
 
         self.model.train()
-        LOG.info("[%s] steps=%d batch=%d pool=%d device=%s", stage_name, steps,
-                 batch_size, pool_size, self.device)
+        LOG.info("[%s] steps=%d batch=%d pool=%d device=%s amp=%s real_fraction=%.2f",
+                 stage_name, steps, batch_size, pool_size, self.device, self.use_amp,
+                 real_fraction)
         for step in range(steps):
             if step % refresh_every == 0:
                 info = pool.refresh(seed=int(cfg.get("seed", 1234)) + step,
-                                    category_weights=cat_weights)
-                LOG.info("[%s] pool refresh @%d  teacher_speech_frac=%.3f",
-                         stage_name, step, info["teacher_speech_frac"])
+                                    category_weights=cat_weights,
+                                    real_source=self.real_source,
+                                    real_fraction=real_fraction, snr_range=snr_range)
+                LOG.info("[%s] pool refresh @%d  speech_frac=%.3f  real=%d syn=%d",
+                         stage_name, step, info["teacher_speech_frac"],
+                         info["n_real"], info["n_syn"])
 
             windows, teacher_probs = pool.sample(batch_size, rng, self.device)
-            student_logits = self.model.forward_sequence(windows, return_logit=True)
-            loss, parts = criterion(student_logits, teacher_probs)
+            with self._amp_ctx():
+                student_logits = self.model.forward_sequence(windows, return_logit=True)
+            loss, parts = criterion(student_logits.float(), teacher_probs)
 
             opt.zero_grad(set_to_none=True)
             loss.backward()

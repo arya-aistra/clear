@@ -44,6 +44,15 @@ def main() -> None:
     ap.add_argument("--stage1-steps", type=int, default=None, help="override stage1 steps")
     ap.add_argument("--stage2-steps", type=int, default=None, help="override stage2 steps")
     ap.add_argument("--batch-size", type=int, default=None, help="override batch_size (both stages)")
+    # real-audio source (recommended). Without these, training is pure synthetic.
+    ap.add_argument("--use-real", action="store_true", help="use real speech (HF LibriSpeech)")
+    ap.add_argument("--hf-dataset", default="librispeech_asr")
+    ap.add_argument("--hf-config", default="clean")
+    ap.add_argument("--hf-split", default="train.clean.100")
+    ap.add_argument("--local-speech-dir", default=None, help="use local wav dir instead of HF")
+    ap.add_argument("--buffer-seconds", type=float, default=1800.0)
+    ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
+    ap.add_argument("--no-amp", action="store_true")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -53,23 +62,35 @@ def main() -> None:
 
     teacher = SileroTeacher()
     gen = SyntheticAudioGenerator()
-    trainer = DFKDTrainer(model, teacher, gen, device=args.device, out_dir=args.out_dir)
 
-    summary = {"model_params": model.count_by_module()}
+    real_source = None
+    if args.use_real or args.local_speech_dir:
+        from clearvad.distill.real_data import RealSpeechSource
+        real_source = RealSpeechSource(
+            dataset_name=args.hf_dataset, config=args.hf_config, split=args.hf_split,
+            local_dir=args.local_speech_dir, buffer_seconds=args.buffer_seconds)
 
-    s1_cfg = load_yaml(args.stage1)
-    if args.stage1_steps is not None:
-        s1_cfg["steps"] = args.stage1_steps
-    if args.batch_size is not None:
-        s1_cfg["batch_size"] = args.batch_size
+    trainer = DFKDTrainer(model, teacher, gen, device=args.device, out_dir=args.out_dir,
+                          real_source=real_source, use_amp=not args.no_amp)
+
+    summary = {"model_params": model.count_by_module(), "real_source": bool(real_source)}
+
+    def _apply_overrides(cfg, steps_override):
+        if steps_override is not None:
+            cfg["steps"] = steps_override
+        if args.batch_size is not None:
+            cfg["batch_size"] = args.batch_size
+        if args.real_fraction is not None:
+            cfg["real_fraction"] = args.real_fraction
+        if real_source is None:
+            cfg["real_fraction"] = 0.0  # no source -> pure synthetic
+        return cfg
+
+    s1_cfg = _apply_overrides(load_yaml(args.stage1), args.stage1_steps)
     summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1")
 
     if not args.skip_stage2:
-        s2_cfg = load_yaml(args.stage2)
-        if args.stage2_steps is not None:
-            s2_cfg["steps"] = args.stage2_steps
-        if args.batch_size is not None:
-            s2_cfg["batch_size"] = args.batch_size
+        s2_cfg = _apply_overrides(load_yaml(args.stage2), args.stage2_steps)
         init = str(Path(args.out_dir) / "stage1_final.pt")
         summary["stage2"] = trainer.run_stage(s2_cfg, stage_name="stage2", init_from=init)
 

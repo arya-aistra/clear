@@ -2,31 +2,33 @@
 stage: stage2
 seed: 1234
 
-steps: 20000
-batch_size: 256
+steps: 4000
+batch_size: 128
 chunks_per_sample: 64
 lr: 1.0e-4
 weight_decay: 1.0e-4
 
-# all three losses active (boundary upweighted for crisp endpoints)
+# all three losses; boundary upweighted for crisp endpoints; class-balanced
 lambda_soft: 1.0
 lambda_boundary: 2.0
 lambda_smooth: 0.5
 temperature: 2.0
-boundary_width: 3        # ±3 frames around a teacher decision change
+boundary_width: 3
 boundary_weight: 5.0
+pos_weight: 3.0
 
-pool_size: 4096
-refresh_every: 2500
+# more synthetic transitions to sharpen onset/endpoint behavior
+real_fraction: 0.5
+snr_range: [0.0, 20.0]
+pool_size: 2048
+refresh_every: 1500
 label_batch: 256
-
-# higher proportion of transitions to sharpen onset/endpoint behavior
 category_weights:
   noise: 0.20
-  speech: 0.20
-  transition: 0.45
+  speech: 0.15
+  transition: 0.50
   hardneg: 0.15
 
 log_every: 50
-agree_every: 1000
-ckpt_every: 5000
+agree_every: 500
+ckpt_every: 3000

@@ -74,6 +74,28 @@ def test_gssm_state_shapes():
     assert not torch.allclose(s0, s1)
 
 
+def test_gssm_parallel_scan_equals_loop():
+    """The fast parallel (associative) scan must equal the loop scan exactly."""
+    m = _make().double()
+    x = torch.randn(2, 50, D_MODEL, dtype=torch.float64)
+    state = torch.randn(2, D_INNER, D_STATE, dtype=torch.float64)
+    out_loop, s_loop = m(x, state, scan_mode="loop")
+    out_par, s_par = m(x, state, scan_mode="parallel")
+    assert torch.allclose(out_loop, out_par, atol=1e-8, rtol=1e-6), \
+        f"max diff {(out_loop - out_par).abs().max().item():.2e}"
+    assert torch.allclose(s_loop, s_par, atol=1e-8, rtol=1e-6)
+
+
+def test_gssm_parallel_scan_nonpow2_length():
+    """Parallel scan must be correct for T that is not a power of two."""
+    m = _make().double()
+    for T in (1, 3, 7, 13, 31):
+        x = torch.randn(1, T, D_MODEL, dtype=torch.float64)
+        ol, _ = m(x, None, scan_mode="loop")
+        op, _ = m(x, None, scan_mode="parallel")
+        assert torch.allclose(ol, op, atol=1e-8, rtol=1e-6), f"T={T}"
+
+
 def test_gssm_initial_state_affects_output():
     """With long memory (dA≈1) and a constant nonzero input (so C is constant, nonzero),
     a different initial state must change the G-SSM output y. This isolates state→output

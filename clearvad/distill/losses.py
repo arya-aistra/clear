@@ -55,6 +55,7 @@ class DFKDLoss(nn.Module):
         temperature: float = 2.0,
         boundary_width: int = 3,
         boundary_weight: float = 5.0,
+        pos_weight: float = 1.0,
         threshold: float = 0.5,
         eps: float = 1e-6,
     ) -> None:
@@ -65,6 +66,9 @@ class DFKDLoss(nn.Module):
         self.T = temperature
         self.boundary_width = boundary_width
         self.boundary_weight = boundary_weight
+        # >1 upweights teacher-speech frames in soft+boundary losses to counter the silence
+        # prior (synthetic pools are ~88% silence). Set from the silence:speech ratio.
+        self.pos_weight = pos_weight
         self.threshold = threshold
         self.eps = eps
 
@@ -72,16 +76,19 @@ class DFKDLoss(nn.Module):
                 ) -> Tuple[Tensor, Dict[str, float]]:
         teacher_probs = teacher_probs.clamp(self.eps, 1 - self.eps)
         teacher_logits = (teacher_probs / (1 - teacher_probs)).log()
+        teacher_hard = (teacher_probs > self.threshold).float()
+        # per-frame class weight: pos_weight on speech frames, 1 on silence
+        cls_w = 1.0 + (self.pos_weight - 1.0) * teacher_hard
 
-        # --- L_soft: temperature-scaled Bernoulli KL (teacher || student) ---
+        # --- L_soft: temperature-scaled Bernoulli KL (teacher || student), class-weighted ---
         pt = torch.sigmoid(teacher_logits / self.T)
         ps = torch.sigmoid(student_logits / self.T)
-        l_soft = bernoulli_kl(pt, ps, self.eps).mean() * (self.T ** 2)
+        kl = bernoulli_kl(pt, ps, self.eps) * (self.T ** 2)
+        l_soft = (kl * cls_w).sum() / cls_w.sum().clamp_min(1.0)
 
-        # --- L_boundary: transition-weighted BCE to hard teacher labels ---
-        teacher_hard = (teacher_probs > self.threshold).float()
+        # --- L_boundary: transition + class weighted BCE to hard teacher labels ---
         if self.l_boundary > 0:
-            w = transition_weight(teacher_hard, self.boundary_width, self.boundary_weight)
+            w = transition_weight(teacher_hard, self.boundary_width, self.boundary_weight) * cls_w
             bce = F.binary_cross_entropy_with_logits(student_logits, teacher_hard,
                                                      reduction="none")
             l_boundary = (bce * w).sum() / w.sum().clamp_min(1.0)

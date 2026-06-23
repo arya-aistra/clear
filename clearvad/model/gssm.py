@@ -72,6 +72,7 @@ class GSSM(nn.Module):
         u_act: Optional[str] = None,
         tie_projections: bool = False,
         bias: bool = False,
+        scan_mode: str = "loop",
         dt_min: float = 1e-3,
         dt_max: float = 1e-1,
         dt_init_floor: float = 1e-4,
@@ -83,6 +84,9 @@ class GSSM(nn.Module):
         self.dt_rank = dt_rank
         self.u_act = u_act
         self.tie_projections = tie_projections
+        # 'loop' = explicit unrolled recurrence (ONNX-exportable, used for export/streaming).
+        # 'parallel' = log-depth associative scan (training speed; mathematically identical).
+        self.scan_mode = scan_mode
 
         # Expand D -> 2E (u and gate z) in a single matmul.
         self.in_proj = nn.Linear(d_model, 2 * d_inner, bias=bias)
@@ -139,20 +143,61 @@ class GSSM(nn.Module):
             out = out + self.out_bias
         return out
 
+    # ---------------------------------------------------------------- scan
+    @staticmethod
+    def _shift(x: Tensor, offset: int, pad_value: float) -> Tensor:
+        """Shift right along time (dim=1) by offset, filling the front with pad_value."""
+        B, T = x.shape[0], x.shape[1]
+        pad = x.new_full((B, offset) + tuple(x.shape[2:]), pad_value)
+        return torch.cat([pad, x[:, : T - offset]], dim=1)
+
+    def _fold_state(self, dA: Tensor, dBu: Tensor, h0: Tensor) -> Tensor:
+        """Fold the initial state into the first step: b0 ← a0·h0 + b0 (out-of-place)."""
+        b0 = dBu[:, :1] + dA[:, :1] * h0.unsqueeze(1)
+        return torch.cat([b0, dBu[:, 1:]], dim=1)
+
+    def _scan_loop(self, a: Tensor, b: Tensor) -> Tensor:
+        """Explicit recurrence H_t = a_t·H_{t-1} + b_t (h_{-1}=0). Unrolls for ONNX."""
+        T = a.shape[1]
+        h = torch.zeros_like(b[:, 0])
+        hs = []
+        for t in range(T):
+            h = a[:, t] * h + b[:, t]
+            hs.append(h)
+        return torch.stack(hs, dim=1)
+
+    def _scan_parallel(self, a: Tensor, b: Tensor) -> Tensor:
+        """Hillis-Steele associative scan of the affine recurrence (O(log T) depth).
+
+        Composition of affine maps f_t(h)=a_t·h+b_t: combine prev→cur as
+        a←a_cur·a_prev, b←a_cur·b_prev+b_cur. Inclusive scan yields H_t (== _scan_loop)."""
+        T = a.shape[1]
+        a_s, b_s = a, b
+        offset = 1
+        while offset < T:
+            a_prev = self._shift(a_s, offset, 1.0)   # identity a = 1
+            b_prev = self._shift(b_s, offset, 0.0)   # identity b = 0
+            b_s = a_s * b_prev + b_s
+            a_s = a_s * a_prev
+            offset *= 2
+        return b_s
+
+    def _scan(self, dA: Tensor, dBu: Tensor, h0: Tensor, mode: str) -> Tensor:
+        b = self._fold_state(dA, dBu, h0)
+        if mode == "parallel":
+            return self._scan_parallel(dA, b)
+        return self._scan_loop(dA, b)
+
     # ---------------------------------------------------------------- forward
-    def forward(self, x: Tensor, state: Optional[Tensor] = None
-                ) -> Tuple[Tensor, Tensor]:
+    def forward(self, x: Tensor, state: Optional[Tensor] = None,
+                scan_mode: Optional[str] = None) -> Tuple[Tensor, Tensor]:
         """Run the block over a [B, T, D] sequence.
 
-        Parameters
-        ----------
-        x : [B, T, d_model]
-        state : optional carried SSM state [B, d_inner, d_state]; zeros if None.
+        x : [B, T, d_model]; state: carried SSM state [B, d_inner, d_state] or None.
+        scan_mode: 'loop' (ONNX/streaming) or 'parallel' (fast training); defaults to
+        self.scan_mode. Both compute the identical recurrence.
 
-        Returns
-        -------
-        out : [B, T, d_model]
-        new_state : [B, d_inner, d_state]  (the final hidden state h_T)
+        Returns (out[B,T,D], new_state[B,d_inner,d_state]).
         """
         if x.dim() != 3:
             raise ValueError(f"GSSM expects [B, T, D]; got {tuple(x.shape)}")
@@ -172,25 +217,19 @@ class GSSM(nn.Module):
         delta = F.softplus(self.dt_proj(dt))                  # [B,T,E]
         A = -torch.exp(self.A_log)                            # [E,N]
 
-        # Discretize. dA:[B,T,E,N], dBu:[B,T,E,N]
-        dA = torch.exp(delta.unsqueeze(-1) * A)               # exp(Δ⊙A)
-        dBu = (delta * u).unsqueeze(-1) * Bm.unsqueeze(2)     # (Δ·u) ⊗ B
+        dA = torch.exp(delta.unsqueeze(-1) * A)               # exp(Δ⊙A)  [B,T,E,N]
+        dBu = (delta * u).unsqueeze(-1) * Bm.unsqueeze(2)     # (Δ·u)⊗B   [B,T,E,N]
 
-        # Recurrence (explicit loop over T → unrolls cleanly for ONNX at fixed T).
-        h = (self.initial_state(B, x.device, x.dtype) if state is None
-             else state.to(dtype=x.dtype))
-        ys = []
-        for t in range(T):
-            h = dA[:, t] * h + dBu[:, t]                      # [B,E,N]
-            y_t = (h * Cm[:, t].unsqueeze(1)).sum(dim=-1)     # [B,E]
-            ys.append(y_t)
-        y = torch.stack(ys, dim=1)                            # [B,T,E]
+        h0 = (self.initial_state(B, x.device, x.dtype) if state is None
+              else state.to(dtype=x.dtype))
+        H = self._scan(dA, dBu, h0, scan_mode or self.scan_mode)   # [B,T,E,N]
+        y = (H * Cm.unsqueeze(2)).sum(dim=-1)                 # [B,T,E]
         y = y + self.D * u                                    # skip connection
 
         out = y * gate                                        # gated fusion
         out = self._apply_out_proj(out)                       # [B,T,D]
         out = out + x                                         # residual
-        return out, h
+        return out, H[:, -1]
 
     # convenience alias used by the streaming layer in later phases
     def step(self, x_t: Tensor, state: Optional[Tensor] = None
