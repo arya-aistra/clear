@@ -1,0 +1,31 @@
+# Multi-teacher Stage 1 — soft-label alignment to the Silero+Pyannote ensemble.
+# Pre-labels the pool ONCE (refresh_every huge) since Pyannote labeling is expensive.
+stage: stage1_mt
+seed: 1234
+
+steps: 6000
+batch_size: 128
+chunks_per_sample: 64
+lr: 3.0e-4
+weight_decay: 1.0e-4
+
+lambda_soft: 1.0
+lambda_boundary: 0.0
+lambda_smooth: 0.0
+temperature: 2.0
+pos_weight: 2.0
+
+real_fraction: 0.7
+snr_range: [0.0, 20.0]
+pool_size: 3072            # larger pool, labeled once (Pyannote is heavy)
+refresh_every: 100000000   # effectively never re-label
+label_batch: 128
+category_weights:
+  noise: 0.35
+  speech: 0.20
+  transition: 0.30
+  hardneg: 0.15
+
+log_every: 50
+agree_every: 500
+ckpt_every: 3000

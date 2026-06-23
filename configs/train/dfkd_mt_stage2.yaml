@@ -1,0 +1,33 @@
+# Multi-teacher Stage 2 — boundary + smoothness, boundary upweighted for crisp endpoints
+# (anti-stickiness). Init from stage1_mt_final.pt.
+stage: stage2_mt
+seed: 1234
+
+steps: 4000
+batch_size: 128
+chunks_per_sample: 64
+lr: 1.0e-4
+weight_decay: 1.0e-4
+
+lambda_soft: 1.0
+lambda_boundary: 3.0        # ↑ from 2.0 — sharper transitions, less sticky endpoint
+lambda_smooth: 0.5
+temperature: 2.0
+boundary_width: 3
+boundary_weight: 6.0        # ↑ — heavier weight right at the transitions
+pos_weight: 2.0
+
+real_fraction: 0.5
+snr_range: [0.0, 20.0]
+pool_size: 3072
+refresh_every: 100000000
+label_batch: 128
+category_weights:
+  noise: 0.20
+  speech: 0.15
+  transition: 0.50          # transition-heavy → trains crisp onset/endpoint
+  hardneg: 0.15
+
+log_every: 50
+agree_every: 500
+ckpt_every: 3000
