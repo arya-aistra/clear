@@ -20,6 +20,34 @@ D_MODEL, D_INNER, D_STATE, DT_RANK = 128, 256, 16, 8
 LSTM_EQUIV_PARAMS = 4 * 128 * (128 + 128) + 4 * 128  # 131,584 (spec reference)
 
 
+def _export_to_bytes(m, args, **kw):
+    """Export to ONNX bytes, preferring the legacy TorchScript exporter.
+
+    torch>=2.x defaults to the dynamo exporter (needs `onnxscript`); the legacy exporter
+    gives predictable unrolling of our explicit T-loop and exact opset control, which is
+    what Phase 5 deployment wants. Try legacy (dynamo=False) first, fall back to dynamo.
+    """
+    # Preferred: legacy exporter.
+    try:
+        buf = io.BytesIO()
+        torch.onnx.export(m, args, buf, dynamo=False, **kw)
+        buf.seek(0)
+        return buf.read()
+    except TypeError:
+        pass          # this torch has no `dynamo` kwarg -> plain default below
+    except Exception:
+        pass          # legacy path unavailable -> try dynamo below
+    # Fallback: dynamo / default exporter.
+    buf = io.BytesIO()
+    try:
+        torch.onnx.export(m, args, buf, dynamo=True, **kw)
+    except TypeError:
+        buf = io.BytesIO()
+        torch.onnx.export(m, args, buf, **kw)
+    buf.seek(0)
+    return buf.read()
+
+
 def _make(seed=0, **kw):
     torch.manual_seed(seed)
     cfg = dict(d_model=D_MODEL, d_inner=D_INNER, d_state=D_STATE, dt_rank=DT_RANK)
@@ -112,9 +140,8 @@ def test_gssm_onnx_exportable(T):
     x = torch.randn(1, T, D_MODEL)
     state = m.initial_state(1)
 
-    buf = io.BytesIO()
-    torch.onnx.export(
-        m, (x, state), buf,
+    model_bytes = _export_to_bytes(
+        m, (x, state),
         input_names=["x", "state"],
         output_names=["out", "new_state"],
         dynamic_axes={"x": {0: "batch"}, "state": {0: "batch"},
@@ -122,14 +149,13 @@ def test_gssm_onnx_exportable(T):
         opset_version=17,
         do_constant_folding=True,
     )
-    buf.seek(0)
 
     with torch.no_grad():
         ref_out, ref_state = m(x, state)
 
     so = ort.SessionOptions()
     so.intra_op_num_threads = 1
-    sess = ort.InferenceSession(buf.read(), sess_options=so,
+    sess = ort.InferenceSession(model_bytes, sess_options=so,
                                 providers=["CPUExecutionProvider"])
     outs = sess.run(None, {"x": x.numpy(), "state": state.numpy()})
     ort_out, ort_state = outs[0], outs[1]

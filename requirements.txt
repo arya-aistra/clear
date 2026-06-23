@@ -24,6 +24,10 @@ soundfile>=0.12
 onnx>=1.15
 onnxruntime>=1.17
 onnxconverter-common>=1.14
+# torch>=2.x routes torch.onnx.export through the dynamo exporter, which imports
+# onnxscript. We prefer the legacy exporter (dynamo=False), but install onnxscript as a
+# safety net so the default/fallback export path also works.
+onnxscript>=0.1
 
 # Serving (kept here too so the GPU box can run the API for integration tests)
 fastapi>=0.110
