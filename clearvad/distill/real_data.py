@@ -64,22 +64,18 @@ class RealSpeechSource:
 
     # ------------------------------------------------------------ sources
     def _from_torchaudio(self, root: str, url: str, target: int) -> np.ndarray:
+        """Use torchaudio only to DOWNLOAD+extract LibriSpeech, then load the FLACs via
+        soundfile (avoids torchaudio.load -> torchcodec, which may be absent)."""
         import torchaudio
         Path(root).mkdir(parents=True, exist_ok=True)
-        LOG.info("Loading torchaudio LibriSpeech [%s] into %s (downloads on first run)...",
+        LOG.info("Downloading torchaudio LibriSpeech [%s] into %s (first run only)...",
                  url, root)
-        ds = torchaudio.datasets.LIBRISPEECH(root, url=url, download=True)
-        chunks, total, n = [], 0, len(ds)
-        for i in range(n):
-            wav, sr, *_ = ds[i]                      # wav: [1, T] float32
-            a = wav.squeeze(0).contiguous().numpy().astype(np.float32)
-            if sr != self.sr:
-                a = resample(a, sr, self.sr)
-            chunks.append(a)
-            total += len(a)
-            if total >= target:
-                break
-        return np.concatenate(chunks)[:target]
+        # Construction downloads + extracts; we do NOT call ds[i] (that needs torchcodec).
+        torchaudio.datasets.LIBRISPEECH(root, url=url, download=True)
+        audio_dir = Path(root) / "LibriSpeech" / url
+        if not audio_dir.exists():
+            audio_dir = Path(root)  # fall back to scanning the whole root for *.flac
+        return self._from_local_dir(str(audio_dir), target)
 
     def _from_local_dir(self, local_dir: str, target: int) -> np.ndarray:
         from clearvad.utils.audio import load_audio
