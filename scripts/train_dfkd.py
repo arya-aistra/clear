@@ -57,6 +57,7 @@ def main() -> None:
     ap.add_argument("--local-speech-dir", default=None, help="use a local wav/flac dir")
     ap.add_argument("--buffer-seconds", type=float, default=1800.0)
     ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
+    ap.add_argument("--pos-weight", type=float, default=None, help="override speech-class pos_weight (both stages)")
     ap.add_argument("--no-amp", action="store_true")
     args = ap.parse_args()
 
@@ -90,6 +91,8 @@ def main() -> None:
             cfg["batch_size"] = args.batch_size
         if args.real_fraction is not None:
             cfg["real_fraction"] = args.real_fraction
+        if args.pos_weight is not None:
+            cfg["pos_weight"] = args.pos_weight
         if real_source is None:
             cfg["real_fraction"] = 0.0  # no source -> pure synthetic
         return cfg
