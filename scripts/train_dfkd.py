@@ -45,11 +45,16 @@ def main() -> None:
     ap.add_argument("--stage2-steps", type=int, default=None, help="override stage2 steps")
     ap.add_argument("--batch-size", type=int, default=None, help="override batch_size (both stages)")
     # real-audio source (recommended). Without these, training is pure synthetic.
-    ap.add_argument("--use-real", action="store_true", help="use real speech (HF LibriSpeech)")
-    ap.add_argument("--hf-dataset", default="librispeech_asr")
+    ap.add_argument("--use-real", action="store_true", help="use real speech for distillation")
+    ap.add_argument("--speech-source", default="torchaudio",
+                    choices=["torchaudio", "hf", "local"],
+                    help="torchaudio LibriSpeech (default, most reliable), hf, or local")
+    ap.add_argument("--ls-url", default="dev-clean", help="torchaudio LibriSpeech subset")
+    ap.add_argument("--ls-root", default="data/librispeech")
+    ap.add_argument("--hf-dataset", default="openslr/librispeech_asr")
     ap.add_argument("--hf-config", default="clean")
     ap.add_argument("--hf-split", default="train.clean.100")
-    ap.add_argument("--local-speech-dir", default=None, help="use local wav dir instead of HF")
+    ap.add_argument("--local-speech-dir", default=None, help="use a local wav/flac dir")
     ap.add_argument("--buffer-seconds", type=float, default=1800.0)
     ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
     ap.add_argument("--no-amp", action="store_true")
@@ -66,9 +71,12 @@ def main() -> None:
     real_source = None
     if args.use_real or args.local_speech_dir:
         from clearvad.distill.real_data import RealSpeechSource
+        source = "local" if args.local_speech_dir else args.speech_source
         real_source = RealSpeechSource(
-            dataset_name=args.hf_dataset, config=args.hf_config, split=args.hf_split,
-            local_dir=args.local_speech_dir, buffer_seconds=args.buffer_seconds)
+            source=source, local_dir=args.local_speech_dir,
+            ls_url=args.ls_url, ls_root=args.ls_root,
+            hf_dataset=args.hf_dataset, hf_config=args.hf_config, hf_split=args.hf_split,
+            buffer_seconds=args.buffer_seconds)
 
     trainer = DFKDTrainer(model, teacher, gen, device=args.device, out_dir=args.out_dir,
                           real_source=real_source, use_amp=not args.no_amp)

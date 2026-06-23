@@ -5,9 +5,14 @@ synthetic audio is sparse/weak. Real speech gives the teacher dense, confident, 
 distribution labels → a real speech detector. Labels still come ONLY from the teacher
 (no human VAD annotations) — this is "zero external LABELS" distillation.
 
-`RealSpeechSource` prefetches a buffer of real speech ONCE (HF streaming dataset or a local
-wav directory), then serves random clips cheaply each pool refresh. Clips can be mixed with
-our synthetic noise at a random SNR for augmentation/robustness.
+`RealSpeechSource` prefetches a buffer of real speech ONCE, then serves random clips cheaply
+each pool refresh, optionally mixed with synthetic noise at a random SNR.
+
+Three sources (in order of reliability):
+  source="torchaudio"  → torchaudio LibriSpeech downloader (default; OpenSLR, 16 kHz, no HF
+                          dataset-script issues). dev-clean (~337 MB, 5.4 h) is plenty.
+  source="local"       → a directory of wav/flac files (zero-risk; pass local_dir).
+  source="hf"          → HuggingFace `datasets` streaming (modern Parquet repos only).
 """
 
 from __future__ import annotations
@@ -25,22 +30,17 @@ LOG = get_logger("realdata")
 
 
 class RealSpeechSource:
-    """Buffer of real speech sampled into fixed-length clips.
-
-    Parameters
-    ----------
-    dataset_name / config / split : HF `datasets` spec (e.g. "librispeech_asr","clean",
-        "train.clean.100"). Ignored if `local_dir` is given.
-    local_dir : directory of wav/flac files to use instead of HF (de-risks network/auth).
-    buffer_seconds : how much audio to prefetch into the in-memory buffer.
-    """
-
     def __init__(
         self,
-        dataset_name: str = "librispeech_asr",
-        config: Optional[str] = "clean",
-        split: str = "train.clean.100",
+        source: str = "torchaudio",
         local_dir: Optional[str] = None,
+        # torchaudio LibriSpeech
+        ls_url: str = "dev-clean",
+        ls_root: str = "data/librispeech",
+        # HF (modern Parquet repos only; the legacy script-based `librispeech_asr` is dead)
+        hf_dataset: str = "openslr/librispeech_asr",
+        hf_config: Optional[str] = "clean",
+        hf_split: str = "train.clean.100",
         sample_rate: int = SAMPLE_RATE,
         buffer_seconds: float = 1800.0,
         normalize_dbfs: Optional[float] = -23.0,
@@ -48,16 +48,38 @@ class RealSpeechSource:
     ) -> None:
         self.sr = sample_rate
         self.normalize_dbfs = normalize_dbfs
-        self.buffer = self._prefetch(dataset_name, config, split, local_dir,
-                                     buffer_seconds, seed)
-        LOG.info("Real-speech buffer: %.1f s (%d samples)",
-                 len(self.buffer) / self.sr, len(self.buffer))
-
-    def _prefetch(self, dataset_name, config, split, local_dir, buffer_seconds, seed):
-        target = int(buffer_seconds * self.sr)
         if local_dir:
-            return self._from_local_dir(local_dir, target)
-        return self._from_hf(dataset_name, config, split, target)
+            source = "local"
+        target = int(buffer_seconds * self.sr)
+        if source == "local":
+            self.buffer = self._from_local_dir(local_dir, target)
+        elif source == "torchaudio":
+            self.buffer = self._from_torchaudio(ls_root, ls_url, target)
+        elif source == "hf":
+            self.buffer = self._from_hf(hf_dataset, hf_config, hf_split, target)
+        else:
+            raise ValueError(f"unknown real-speech source: {source!r}")
+        LOG.info("Real-speech buffer: %.1f s (%d samples) from source=%s",
+                 len(self.buffer) / self.sr, len(self.buffer), source)
+
+    # ------------------------------------------------------------ sources
+    def _from_torchaudio(self, root: str, url: str, target: int) -> np.ndarray:
+        import torchaudio
+        Path(root).mkdir(parents=True, exist_ok=True)
+        LOG.info("Loading torchaudio LibriSpeech [%s] into %s (downloads on first run)...",
+                 url, root)
+        ds = torchaudio.datasets.LIBRISPEECH(root, url=url, download=True)
+        chunks, total, n = [], 0, len(ds)
+        for i in range(n):
+            wav, sr, *_ = ds[i]                      # wav: [1, T] float32
+            a = wav.squeeze(0).contiguous().numpy().astype(np.float32)
+            if sr != self.sr:
+                a = resample(a, sr, self.sr)
+            chunks.append(a)
+            total += len(a)
+            if total >= target:
+                break
+        return np.concatenate(chunks)[:target]
 
     def _from_local_dir(self, local_dir: str, target: int) -> np.ndarray:
         from clearvad.utils.audio import load_audio
@@ -84,16 +106,15 @@ class RealSpeechSource:
         try:
             from datasets import load_dataset
         except ImportError as exc:  # pragma: no cover
-            raise ImportError("Real-audio path needs the `datasets` package: "
-                              "pip install datasets soundfile") from exc
+            raise ImportError("HF path needs `datasets`: pip install datasets soundfile") from exc
         LOG.info("Streaming HF dataset %s/%s [%s] ...", dataset_name, config, split)
         try:
-            ds = load_dataset(dataset_name, config, split=split, streaming=True,
-                              trust_remote_code=True)
+            # NOTE: no trust_remote_code (removed in modern datasets); use Parquet repos only.
+            ds = load_dataset(dataset_name, config, split=split, streaming=True)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(
                 f"Failed to load HF dataset {dataset_name}/{config} [{split}]: {exc!r}. "
-                f"Check access/network, or pass local_dir=<speech folder>."
+                f"Use --speech-source torchaudio (default) or --local-speech-dir instead."
             ) from exc
         chunks, total = [], 0
         for ex in ds:
