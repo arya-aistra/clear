@@ -36,14 +36,19 @@ def test_full_model_none_state_ok():
 
 
 def test_full_model_state_carry():
+    """A non-zero input state must propagate to both the output prob and the new state.
+
+    Note: on an *untrained* random-init model the state magnitude accumulated from one
+    noise chunk is tiny (~1e-6 effect), so we inject an explicit non-zero state to test
+    that state is genuinely plumbed through (the exact carry is already proven by
+    test_full_model_streaming_equivalence)."""
     m = _model()
-    c1 = torch.randn(1, TOTAL_INPUT_SAMPLES)
     c2 = torch.randn(1, TOTAL_INPUT_SAMPLES)
-    # carried vs reset: feeding c2 after c1 should differ from feeding c2 fresh
-    _, s1 = m(c1, None)
-    p_carry, _ = m(c2, s1)
-    p_fresh, _ = m(c2, None)
-    assert not torch.allclose(p_carry, p_fresh, atol=1e-6)
+    big_state = torch.full((1, D_INNER, D_STATE), 4.0)
+    p_fresh, s_fresh = m(c2, None)
+    p_carry, s_carry = m(c2, big_state)
+    assert (p_carry - p_fresh).abs().item() > 1e-4, "input state did not affect output prob"
+    assert not torch.allclose(s_carry, s_fresh, atol=1e-4), "input state did not affect new state"
 
 
 def test_full_model_state_reset_zero_equals_none():
