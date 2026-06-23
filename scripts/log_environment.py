@@ -33,7 +33,8 @@ PACKAGES = [
 def _version(modname: str):
     try:
         mod = import_module(modname)
-        return getattr(mod, "__version__", "unknown")
+        # str() coerces str-subclasses like torch's TorchVersion to a plain string.
+        return str(getattr(mod, "__version__", "unknown"))
     except Exception as exc:  # noqa: BLE001
         return f"NOT INSTALLED ({type(exc).__name__})"
 
@@ -43,9 +44,10 @@ def _torch_info() -> dict:
     try:
         import torch
 
-        info["torch_version"] = torch.__version__
+        info["torch_version"] = str(torch.__version__)
         info["cuda_available"] = bool(torch.cuda.is_available())
-        info["cuda_version"] = getattr(torch.version, "cuda", None)
+        cuda_v = getattr(torch.version, "cuda", None)
+        info["cuda_version"] = str(cuda_v) if cuda_v is not None else None
         if torch.cuda.is_available():
             info["gpu_count"] = torch.cuda.device_count()
             info["gpu_names"] = [torch.cuda.get_device_name(i)

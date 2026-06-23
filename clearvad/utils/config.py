@@ -16,6 +16,23 @@ import yaml
 PathLike = Union[str, os.PathLike]
 
 
+class _RobustDumper(yaml.SafeDumper):
+    """SafeDumper that stringifies anything it can't otherwise represent.
+
+    Needed because values like ``torch.__version__`` are ``str`` *subclasses*
+    (TorchVersion) or numpy scalars, which SafeDumper has no representer for and would
+    otherwise raise RepresenterError on. Unknown objects are emitted as plain strings.
+    """
+
+
+def _represent_fallback(dumper: yaml.Dumper, data: Any):
+    return dumper.represent_str(str(data))
+
+
+# Catch-all for unknown types (yaml_representers[None] == represent_undefined by default).
+_RobustDumper.add_representer(None, _represent_fallback)
+
+
 def load_yaml(path: PathLike) -> Dict[str, Any]:
     """Load a YAML file into a plain dict."""
     with open(path, "r", encoding="utf-8") as fh:
@@ -24,11 +41,12 @@ def load_yaml(path: PathLike) -> Dict[str, Any]:
 
 
 def save_yaml(data: Dict[str, Any], path: PathLike) -> None:
-    """Write a dict to YAML, creating parent dirs."""
+    """Write a dict to YAML, creating parent dirs. Unknown objects are stringified."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     with open(p, "w", encoding="utf-8") as fh:
-        yaml.safe_dump(data, fh, sort_keys=False, default_flow_style=False)
+        yaml.dump(data, fh, Dumper=_RobustDumper, sort_keys=False,
+                  default_flow_style=False)
 
 
 def set_global_seed(seed: int = 1234, deterministic: bool = True) -> int:
