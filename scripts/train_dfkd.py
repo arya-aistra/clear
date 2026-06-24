@@ -59,13 +59,20 @@ def main() -> None:
     ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
     ap.add_argument("--pos-weight", type=float, default=None, help="override speech-class pos_weight (both stages)")
     ap.add_argument("--no-amp", action="store_true")
-    # multi-teacher (accuracy track)
+    # distillation teacher (for synthetic/distill data mode + transfer-eval reference)
     ap.add_argument("--teacher", default="silero",
-                    choices=["silero", "ten", "nemo", "multi-ten", "multi-nemo", "multi-pyannote"],
-                    help="'nemo'=NeMo MarbleNet alone; 'multi-nemo'=Silero+NeMo; etc.")
-    ap.add_argument("--hf-token", default=None, help="HF token for gated pyannote model")
+                    choices=["silero", "nemo", "multi-nemo", "multi-firered"],
+                    help="teacher for distill mode (constructed mode uses ground-truth labels)")
     ap.add_argument("--silero-weight", type=float, default=0.5, help="ensemble Silero weight")
     ap.add_argument("--second-weight", type=float, default=0.5, help="ensemble 2nd-teacher weight")
+    # ACCURACY TRACK: constructed ground-truth-labeled data (real speech + real silence gaps)
+    ap.add_argument("--data", default="synthetic", choices=["synthetic", "constructed"],
+                    help="'constructed' = supervised on true labels from construction (beats Silero)")
+    ap.add_argument("--aux-teacher", default="none", choices=["none", "silero", "nemo", "firered"],
+                    help="optional soft-label teacher blended with true labels (constructed mode)")
+    ap.add_argument("--true-weight", type=float, default=1.0,
+                    help="constructed mode: weight on TRUE labels (1.0=pure supervised; <1 blends aux teacher)")
+    ap.add_argument("--label-smooth", type=float, default=0.03, help="label smoothing on true labels")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -73,11 +80,7 @@ def main() -> None:
     model = ClearVADModel.from_config(model_cfg)
     LOG.info("Model params by module: %s", model.count_by_module())
 
-    if args.teacher == "ten":
-        from clearvad.distill.ten_teacher import TenVadTeacher
-        LOG.info("Teacher: TEN VAD (alone)")
-        teacher = TenVadTeacher()
-    elif args.teacher == "nemo":
+    if args.teacher == "nemo":
         from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
         LOG.info("Teacher: NeMo MarbleNet (alone)")
         teacher = NeMoMarbleTeacher()
@@ -85,14 +88,10 @@ def main() -> None:
         from clearvad.distill.multi_teacher import MultiTeacher
         LOG.info("Multi-teacher: Silero(%.2f) + NeMo(%.2f)", args.silero_weight, args.second_weight)
         teacher = MultiTeacher.silero_nemo(args.silero_weight, args.second_weight)
-    elif args.teacher == "multi-ten":
+    elif args.teacher == "multi-firered":
         from clearvad.distill.multi_teacher import MultiTeacher
-        LOG.info("Multi-teacher: Silero(%.2f) + TEN(%.2f)", args.silero_weight, args.second_weight)
-        teacher = MultiTeacher.silero_ten(args.silero_weight, args.second_weight)
-    elif args.teacher == "multi-pyannote":
-        from clearvad.distill.multi_teacher import MultiTeacher
-        LOG.info("Multi-teacher: Silero(%.2f) + Pyannote(%.2f)", args.silero_weight, args.second_weight)
-        teacher = MultiTeacher.silero_pyannote(args.silero_weight, args.second_weight, args.hf_token)
+        LOG.info("Multi-teacher: Silero(%.2f) + FireRedVAD(%.2f)", args.silero_weight, args.second_weight)
+        teacher = MultiTeacher.silero_firered(args.silero_weight, args.second_weight)
     else:
         teacher = SileroTeacher()
     gen = SyntheticAudioGenerator()
@@ -125,13 +124,38 @@ def main() -> None:
             cfg["real_fraction"] = 0.0  # no source -> pure synthetic
         return cfg
 
+    # ACCURACY TRACK: constructed ground-truth-labeled pool (real speech + real silence gaps).
+    make_pool = (lambda cfg: None)
+    if args.data == "constructed":
+        if real_source is None:
+            raise SystemExit("--data constructed requires real speech: pass --use-real (or --local-speech-dir)")
+        aux = None
+        if args.aux_teacher == "silero":
+            aux = teacher if isinstance(teacher, SileroTeacher) else SileroTeacher()
+        elif args.aux_teacher == "nemo":
+            from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
+            aux = NeMoMarbleTeacher()
+        elif args.aux_teacher == "firered":
+            from clearvad.distill.firered_teacher import FireRedVADTeacher
+            aux = FireRedVADTeacher()
+        from clearvad.distill.constructed_data import ConstructedDataPool
+        LOG.info("DATA=constructed (true_weight=%.2f, aux_teacher=%s, label_smooth=%.3f)",
+                 args.true_weight, args.aux_teacher, args.label_smooth)
+
+        def make_pool(cfg):
+            return ConstructedDataPool(
+                real_source, gen, pool_size=int(cfg.get("pool_size", 2048)),
+                clip_chunks=int(cfg.get("chunks_per_sample", 64)), teacher=aux,
+                true_weight=args.true_weight, label_smooth=args.label_smooth)
+
     s1_cfg = _apply_overrides(load_yaml(args.stage1), args.stage1_steps)
-    summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1")
+    summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1", pool=make_pool(s1_cfg))
 
     if not args.skip_stage2:
         s2_cfg = _apply_overrides(load_yaml(args.stage2), args.stage2_steps)
         init = str(Path(args.out_dir) / "stage1_final.pt")
-        summary["stage2"] = trainer.run_stage(s2_cfg, stage_name="stage2", init_from=init)
+        summary["stage2"] = trainer.run_stage(s2_cfg, stage_name="stage2", init_from=init,
+                                              pool=make_pool(s2_cfg))
 
     # Optional real-audio transfer eval (Claim 2 honesty check)
     if args.real_audio:

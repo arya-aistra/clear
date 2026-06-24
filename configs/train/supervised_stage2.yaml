@@ -1,0 +1,24 @@
+# Accuracy track — Stage 2: boundary + smoothness refinement on constructed labels.
+# Init from sup_stage1_final.pt. Use with: --data constructed.
+stage: sup_stage2
+seed: 1234
+
+steps: 4000
+batch_size: 128
+chunks_per_sample: 64
+lr: 1.0e-4
+weight_decay: 1.0e-4
+
+lambda_soft: 1.0
+lambda_boundary: 2.0       # upweight crisp transitions
+lambda_smooth: 0.5
+temperature: 2.0
+boundary_width: 3
+boundary_weight: 5.0
+pos_weight: 1.0
+
+pool_size: 3072
+refresh_every: 1500
+log_every: 50
+agree_every: 500
+ckpt_every: 4000

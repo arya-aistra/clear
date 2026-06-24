@@ -159,7 +159,10 @@ class DFKDTrainer:
 
     # ------------------------------------------------------------ training
     def run_stage(self, cfg: Dict[str, Any], stage_name: str = "stage1",
-                  init_from: Optional[str] = None) -> Dict[str, Any]:
+                  init_from: Optional[str] = None, pool=None) -> Dict[str, Any]:
+        """Train one stage. If `pool` is given (e.g. ConstructedDataPool with ground-truth
+        labels) it is used instead of the default synthetic-distillation DataPool, and its
+        true-label holdout drives the eval metrics."""
         torch_ = torch
         if init_from:
             self.model.load_state_dict(torch_.load(init_from, map_location=self.device))
@@ -191,7 +194,11 @@ class DFKDTrainer:
         opt = torch_.optim.AdamW(self.model.parameters(), lr=lr, weight_decay=wd)
         sched = torch_.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=steps)
 
-        pool = DataPool(self.teacher, self.gen, pool_size, clip_chunks)
+        if pool is None:
+            pool = DataPool(self.teacher, self.gen, pool_size, clip_chunks)
+        # If the pool provides a (true-label) holdout, use it for eval metrics.
+        if hasattr(pool, "holdout"):
+            self._holdout = pool.holdout()
         rng = np.random.default_rng(int(cfg.get("seed", 1234)))
 
         self.model.train()
@@ -204,9 +211,9 @@ class DFKDTrainer:
                                     category_weights=cat_weights,
                                     real_source=self.real_source,
                                     real_fraction=real_fraction, snr_range=snr_range)
+                sf = info.get("teacher_speech_frac", info.get("speech_frac", 0.0))
                 LOG.info("[%s] pool refresh @%d  speech_frac=%.3f  real=%d syn=%d",
-                         stage_name, step, info["teacher_speech_frac"],
-                         info["n_real"], info["n_syn"])
+                         stage_name, step, sf, info.get("n_real", 0), info.get("n_syn", 0))
 
             windows, teacher_probs = pool.sample(batch_size, rng, self.device)
             with self._amp_ctx():

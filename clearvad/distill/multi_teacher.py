@@ -52,13 +52,6 @@ class MultiTeacher:
 
     # ------------------------------------------------------------ convenience
     @classmethod
-    def silero_ten(cls, silero_weight: float = 0.5, ten_weight: float = 0.5,
-                   hop_size: int = 256, device: str = "cpu") -> "MultiTeacher":
-        from clearvad.distill.ten_teacher import TenVadTeacher
-        return cls([SileroTeacher(device=device), TenVadTeacher(hop_size=hop_size)],
-                   [silero_weight, ten_weight])
-
-    @classmethod
     def silero_nemo(cls, silero_weight: float = 0.5, nemo_weight: float = 0.5,
                     device: str = "cpu") -> "MultiTeacher":
         from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
@@ -66,9 +59,8 @@ class MultiTeacher:
                    [silero_weight, nemo_weight])
 
     @classmethod
-    def silero_pyannote(cls, silero_weight: float = 0.5, pyannote_weight: float = 0.5,
-                        hf_token: Optional[str] = None, device: str = "cpu") -> "MultiTeacher":
-        from clearvad.distill.pyannote_teacher import PyannoteTeacher
-        return cls([SileroTeacher(device=device),
-                    PyannoteTeacher(hf_token=hf_token, device=device)],
-                   [silero_weight, pyannote_weight])
+    def silero_firered(cls, silero_weight: float = 0.5, firered_weight: float = 0.5,
+                       device: str = "cpu") -> "MultiTeacher":
+        from clearvad.distill.firered_teacher import FireRedVADTeacher
+        return cls([SileroTeacher(device=device), FireRedVADTeacher(device=device)],
+                   [silero_weight, firered_weight])

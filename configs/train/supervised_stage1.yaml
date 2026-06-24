@@ -1,0 +1,26 @@
+# Accuracy track — Stage 1: supervised on CONSTRUCTED ground-truth labels
+# (real speech + real silence gaps). Use with: --data constructed.
+# Data is class-balanced by construction, so pos_weight=1.0.
+stage: sup_stage1
+seed: 1234
+
+steps: 8000
+batch_size: 128
+chunks_per_sample: 64
+lr: 3.0e-4
+weight_decay: 1.0e-4
+
+# true labels available -> soft (KL to label) + boundary (BCE at transitions) from the start
+lambda_soft: 1.0
+lambda_boundary: 1.0
+lambda_smooth: 0.0
+temperature: 2.0
+boundary_width: 3
+boundary_weight: 5.0
+pos_weight: 1.0
+
+pool_size: 3072
+refresh_every: 1500
+log_every: 50
+agree_every: 500
+ckpt_every: 4000
