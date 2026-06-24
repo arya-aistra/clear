@@ -50,10 +50,19 @@ def build_eval_set(
     snr_range=(5.0, 20.0),
     seed: int = 12345,
     normalize_dbfs: float = -23.0,
+    noise_source=None,
 ) -> List[EvalSequence]:
-    """Construct controlled eval sequences with exact speech/silence boundaries."""
+    """Construct controlled eval sequences with exact speech/silence boundaries.
+
+    Pass `noise_source` (with .sample(n, rng), e.g. MUSAN) + a low `snr_range` to build a HARD,
+    real-world noisy eval (speech-in-noise + real-noise backgrounds) — the deployment condition.
+    """
     rng = np.random.default_rng(seed)
     gen = SyntheticAudioGenerator(SAMPLE_RATE)
+
+    def _noise(n):
+        return noise_source.sample(n, rng) if noise_source is not None else gen.noise(n, rng)
+
     L = int(seq_seconds * SAMPLE_RATE)
     K = L // CHUNK_SAMPLES
     buf, BN = speech_buffer, len(speech_buffer)
@@ -73,8 +82,7 @@ def build_eval_set(
                 s = int(rng.integers(0, max(BN - seg, 1)))
                 clip = buf[s:s + seg].copy()
                 if rng.random() < noise_prob:
-                    noise = gen.noise(seg, rng)
-                    clip, _ = mix_at_snr(clip, noise, float(rng.uniform(*snr_range)))
+                    clip, _ = mix_at_snr(clip, _noise(seg), float(rng.uniform(*snr_range)))
                 audio[pos:pos + seg] = clip
                 sample_lab[pos:pos + seg] = 1.0
                 pos += seg
@@ -84,7 +92,8 @@ def build_eval_set(
                 seg = min(seg, L - pos)
                 # gap is either true silence or low-level non-speech noise (still label 0)
                 if rng.random() < 0.5:
-                    audio[pos:pos + seg] = gen.noise(seg, rng) * 0.1
+                    bg = _noise(seg)
+                    audio[pos:pos + seg] = (bg / (np.max(np.abs(bg)) + 1e-9) * 0.1).astype(np.float32)
                 gap_start_f = pos // CHUNK_SAMPLES
                 gap_end_f = (pos + seg) // CHUNK_SAMPLES
                 if gap_end_f > gap_start_f:

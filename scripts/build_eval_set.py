@@ -46,6 +46,12 @@ def main() -> None:
     ap.add_argument("--local-speech-dir", default=None)
     ap.add_argument("--cache", default="data/eval/controlled_eval.npz")
     ap.add_argument("--out", default="reports/phase8/silero_eval_bar.json")
+    # HARD real-world eval: mix real noise (MUSAN/local) into speech at low SNR
+    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local"])
+    ap.add_argument("--noise-dir", default=None)
+    ap.add_argument("--snr-min", type=float, default=5.0)
+    ap.add_argument("--snr-max", type=float, default=20.0)
+    ap.add_argument("--noise-prob", type=float, default=0.4)
     args = ap.parse_args()
 
     LOG.info("Building speech buffer from %s ...", args.ls_url)
@@ -54,8 +60,18 @@ def main() -> None:
         local_dir=args.local_speech_dir, ls_url=args.ls_url,
         buffer_seconds=args.buffer_seconds)
 
-    LOG.info("Constructing %d eval sequences (%.0fs each)...", args.n_sequences, args.seq_seconds)
-    seqs = build_eval_set(src.buffer, n_sequences=args.n_sequences, seq_seconds=args.seq_seconds)
+    noise_source = None
+    if args.noise_source != "none" or args.noise_dir:
+        from clearvad.distill.real_noise import RealNoiseSource
+        noise_source = RealNoiseSource(source="local" if args.noise_dir else "openslr",
+                                       local_dir=args.noise_dir, buffer_seconds=1200.0)
+
+    LOG.info("Constructing %d eval sequences (%.0fs each, noise=%s, SNR=%.0f-%.0f)...",
+             args.n_sequences, args.seq_seconds, args.noise_dir or args.noise_source,
+             args.snr_min, args.snr_max)
+    seqs = build_eval_set(src.buffer, n_sequences=args.n_sequences, seq_seconds=args.seq_seconds,
+                          noise_source=noise_source, noise_prob=args.noise_prob,
+                          snr_range=(args.snr_min, args.snr_max))
 
     # cache audio + labels + gaps
     Path(args.cache).parent.mkdir(parents=True, exist_ok=True)

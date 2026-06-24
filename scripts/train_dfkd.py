@@ -73,6 +73,11 @@ def main() -> None:
     ap.add_argument("--true-weight", type=float, default=1.0,
                     help="constructed mode: weight on TRUE labels (1.0=pure supervised; <1 blends aux teacher)")
     ap.add_argument("--label-smooth", type=float, default=0.03, help="label smoothing on true labels")
+    # REAL-WORLD ROBUSTNESS: real noise (MUSAN) mixed into constructed clips (speech-in-noise)
+    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local"],
+                    help="real noise for constructed data: MUSAN (OpenSLR) or a local dir")
+    ap.add_argument("--noise-dir", default=None, help="local noise wav/flac dir")
+    ap.add_argument("--noise-buffer-seconds", type=float, default=1800.0)
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -138,15 +143,26 @@ def main() -> None:
         elif args.aux_teacher == "firered":
             from clearvad.distill.firered_teacher import FireRedVADTeacher
             aux = FireRedVADTeacher()
+        noise_source = None
+        if args.noise_source != "none" or args.noise_dir:
+            from clearvad.distill.real_noise import RealNoiseSource
+            if args.noise_dir:
+                noise_source = RealNoiseSource(source="local", local_dir=args.noise_dir,
+                                               buffer_seconds=args.noise_buffer_seconds)
+            else:
+                noise_source = RealNoiseSource(source="openslr",
+                                               buffer_seconds=args.noise_buffer_seconds)
         from clearvad.distill.constructed_data import ConstructedDataPool
-        LOG.info("DATA=constructed (true_weight=%.2f, aux_teacher=%s, label_smooth=%.3f)",
-                 args.true_weight, args.aux_teacher, args.label_smooth)
+        LOG.info("DATA=constructed (true_weight=%.2f, aux_teacher=%s, label_smooth=%.3f, noise=%s)",
+                 args.true_weight, args.aux_teacher, args.label_smooth,
+                 args.noise_dir or args.noise_source)
 
         def make_pool(cfg):
             return ConstructedDataPool(
                 real_source, gen, pool_size=int(cfg.get("pool_size", 2048)),
                 clip_chunks=int(cfg.get("chunks_per_sample", 64)), teacher=aux,
-                true_weight=args.true_weight, label_smooth=args.label_smooth)
+                true_weight=args.true_weight, label_smooth=args.label_smooth,
+                noise_source=noise_source)
 
     s1_cfg = _apply_overrides(load_yaml(args.stage1), args.stage1_steps)
     summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1", pool=make_pool(s1_cfg))
