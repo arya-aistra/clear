@@ -30,6 +30,15 @@ class TenVadTeacher:
             ) from exc
         if CHUNK_SAMPLES % hop_size != 0:
             raise ValueError(f"hop_size {hop_size} must divide CHUNK_SAMPLES {CHUNK_SAMPLES}")
+        # Probe-construct once to surface native-lib errors (e.g. missing libc++) clearly.
+        try:
+            TenVad(hop_size=hop_size)
+        except OSError as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"TEN VAD native library failed to load ({exc}). It links libc++ — install it:\n"
+                "  sudo apt-get install -y libc++1 libc++abi1\n"
+                "(or `conda install -c conda-forge libcxx` in a conda env)."
+            ) from exc
         self._TenVad = TenVad
         self.hop = hop_size
         self.frames_per_chunk = CHUNK_SAMPLES // hop_size   # 512/256 = 2
