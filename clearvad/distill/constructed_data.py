@@ -24,19 +24,23 @@ from clearvad.utils.audio import mix_at_snr, rms_normalize
 
 
 def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
-                   gen, speech_seg_ms=(400, 2200), silence_ms=(200, 1200),
+                   gen, speech_seg_ms=(300, 1200), silence_ms=(200, 900),
                    noise_prob: float = 0.5, snr_range=(3.0, 20.0),
                    normalize_dbfs: float = -23.0) -> Tuple[np.ndarray, np.ndarray]:
-    """Build one clip = alternating real speech / silence(or noise) -> (audio[L], labels[K] bool)."""
+    """Build one clip = alternating real speech / silence(or noise) -> (audio[L], labels[K] bool).
+
+    Any single segment is capped at half the clip, so every clip alternates at least once and
+    therefore contains BOTH speech and silence (avoids the all-speech degeneracy)."""
     audio = np.zeros(n_samples, dtype=np.float32)
     sample_lab = np.zeros(n_samples, dtype=np.float32)
     BN = len(buffer)
+    half = max(n_samples // 2, CHUNK_SAMPLES)
     pos = 0
     place_speech = bool(rng.random() < 0.6)
     while pos < n_samples:
         if place_speech:
             seg = int(rng.uniform(*speech_seg_ms) / 1000 * 16000)
-            seg = min(seg, n_samples - pos)
+            seg = min(seg, n_samples - pos, half)
             s = int(rng.integers(0, max(BN - seg, 1)))
             clip = buffer[s:s + seg].copy()
             if rng.random() < noise_prob:
@@ -46,7 +50,7 @@ def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
             pos += seg
         else:
             seg = int(rng.uniform(*silence_ms) / 1000 * 16000)
-            seg = min(seg, n_samples - pos)
+            seg = min(seg, n_samples - pos, half)
             if rng.random() < 0.5:                       # real silence vs low-level noise
                 audio[pos:pos + seg] = gen.noise(seg, rng) * 0.1
             pos += seg
