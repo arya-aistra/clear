@@ -12,8 +12,12 @@ class _FakeNoise:
         self.buffer = np.random.default_rng(0).standard_normal(16000 * seconds).astype(np.float32)
 
     def sample(self, n, rng):
-        s = int(rng.integers(0, max(len(self.buffer) - n, 1)))
-        return self.buffer[s:s + n].copy()
+        L = len(self.buffer)
+        if L >= n:
+            s = int(rng.integers(0, L - n + 1))
+            return self.buffer[s:s + n].copy()
+        reps = int(np.ceil(n / max(L, 1)))          # tile when buffer shorter than request
+        return np.tile(self.buffer, reps)[:n].copy()
 
 
 def test_construct_clip_with_real_noise_has_both_classes():
