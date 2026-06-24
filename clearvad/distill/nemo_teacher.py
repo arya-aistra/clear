@@ -28,7 +28,13 @@ class NeMoMarbleTeacher:
                 "NeMoMarbleTeacher needs nemo_toolkit[asr]. Install carefully (it may try to "
                 "change torch): pip install 'nemo_toolkit[asr]'"
             ) from exc
-        self.model = EncDecFrameClassificationModel.from_pretrained(model_name)
+        # strict=False: the published checkpoint omits the loss module's "loss.weight"
+        # (not needed for inference); current NeMo registers it and would otherwise fail.
+        try:
+            self.model = EncDecFrameClassificationModel.from_pretrained(model_name, strict=False)
+        except TypeError:
+            # older NeMo from_pretrained without strict kwarg -> restore_from path
+            self.model = EncDecFrameClassificationModel.from_pretrained(model_name)
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.eval().to(self.device)
         self.sr = SAMPLE_RATE
