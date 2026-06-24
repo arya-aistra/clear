@@ -51,12 +51,17 @@ def export_fp16(fp32_path: str, out_path: str) -> str:
 
 # --------------------------------------------------------------------- calibration
 def collect_calibration_samples(model, generator, n_chunks: int = 1000,
-                                clip_chunks: int = 64, seed: int = 4321
-                                ) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """Stream synthetic audio through the FP32 torch model; collect (chunk[1,576], state) pairs.
+                                clip_chunks: int = 64, seed: int = 4321,
+                                audio_clips=None) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Stream audio through the FP32 torch model; collect (chunk[1,576], state) pairs.
 
     Mirrors deployment: builds 576-windows (64 ctx + 512) with context carried across chunks,
     runs model.forward carrying state, and records the (window, state_in) fed at each step.
+
+    Calibration distribution matters for INT8 accuracy: pass `audio_clips` (a list of [L]
+    float arrays, e.g. real speech + silence) to calibrate on the DEPLOYMENT distribution
+    rather than pure synthetic — this reduces FP32→INT8 degradation for models trained on
+    real audio.
     """
     import torch
 
@@ -65,11 +70,20 @@ def collect_calibration_samples(model, generator, n_chunks: int = 1000,
     samples: List[Tuple[np.ndarray, np.ndarray]] = []
     state = model.reset_state(1)
     prev_ctx = np.zeros(CONTEXT_SAMPLES, dtype=np.float32)
+
+    def _next_clip(idx):
+        if audio_clips is not None:
+            return np.asarray(audio_clips[idx % len(audio_clips)], dtype=np.float32)
+        a, _ = generator.generate_batch(1, clip_chunks * CHUNK_SAMPLES, seed=int(rng.integers(1 << 30)))
+        return a[0]
+
     with torch.no_grad():
+        clip_idx = 0
         while len(samples) < n_chunks:
-            audio, _ = generator.generate_batch(1, clip_chunks * CHUNK_SAMPLES, seed=int(rng.integers(1 << 30)))
-            audio = audio[0]
-            for i in range(clip_chunks):
+            audio = _next_clip(clip_idx)
+            clip_idx += 1
+            n_clip_chunks = len(audio) // CHUNK_SAMPLES
+            for i in range(n_clip_chunks):
                 chunk512 = audio[i * CHUNK_SAMPLES:(i + 1) * CHUNK_SAMPLES]
                 window = np.concatenate([prev_ctx, chunk512]).astype(np.float32)  # [576]
                 state_np = state.detach().cpu().numpy().astype(np.float32)

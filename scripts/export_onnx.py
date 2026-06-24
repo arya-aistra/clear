@@ -55,6 +55,11 @@ def main() -> None:
     ap.add_argument("--bench-chunks", type=int, default=10000)
     ap.add_argument("--skip-bench", action="store_true")
     ap.add_argument("--out", default="reports/phase5/export_report.json")
+    # INT8 calibration distribution: 'synthetic' (default) or 'constructed' (real speech +
+    # silence — matches the supervised model's deployment distribution, lower INT8 degradation)
+    ap.add_argument("--calib-source", default="synthetic", choices=["synthetic", "constructed"])
+    ap.add_argument("--ls-url", default="dev-clean")
+    ap.add_argument("--buffer-seconds", type=float, default=1800.0)
     args = ap.parse_args()
 
     import torch
@@ -85,9 +90,19 @@ def main() -> None:
         report["fp16"] = {"error": repr(exc)}
 
     # ---- INT8 ----
-    LOG.info("Collecting %d calibration samples...", args.calib_chunks)
     gen = SyntheticAudioGenerator()
-    calib = collect_calibration_samples(model, gen, n_chunks=args.calib_chunks)
+    audio_clips = None
+    if args.calib_source == "constructed":
+        from clearvad.distill.constructed_data import construct_clip
+        from clearvad.distill.real_data import RealSpeechSource
+        LOG.info("Building constructed (real speech + silence) calibration clips from %s...",
+                 args.ls_url)
+        src = RealSpeechSource(ls_url=args.ls_url, buffer_seconds=args.buffer_seconds)
+        rng = np.random.default_rng(4321)
+        n_clips = max(8, args.calib_chunks // 64 + 1)
+        audio_clips = [construct_clip(src.buffer, 64 * 512, rng, gen)[0] for _ in range(n_clips)]
+    LOG.info("Collecting %d calibration samples (source=%s)...", args.calib_chunks, args.calib_source)
+    calib = collect_calibration_samples(model, gen, n_chunks=args.calib_chunks, audio_clips=audio_clips)
     LOG.info("Static INT8 quantization -> %s", int8)
     quantize_int8(fp32, int8, calib)
     report["int8"] = {"size_mb": onnx_size_mb(int8),
