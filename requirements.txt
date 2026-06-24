@@ -22,7 +22,10 @@ soundfile>=0.12
 # real-audio distillation source (HF streaming datasets, e.g. LibriSpeech)
 datasets>=2.18
 librosa>=0.10
-# multi-teacher distillation: Pyannote segmentation as a stronger 2nd teacher (gated HF model)
+# multi-teacher distillation (stronger 2nd teachers; either is optional):
+#   TEN VAD (beats Silero on precision + endpoint latency; clean frame-level API):
+#     pip install git+https://github.com/TEN-framework/ten-vad.git
+#   Pyannote segmentation (gated HF model):
 pyannote.audio>=3.1
 
 # ONNX export / quantize / validate (CPU runtime)

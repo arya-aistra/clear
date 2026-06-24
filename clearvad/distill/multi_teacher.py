@@ -1,14 +1,16 @@
-"""Multi-teacher: weighted ensemble of Silero + Pyannote soft labels.
+"""Multi-teacher: weighted ensemble of any frame-level teachers' soft labels.
 
 Drop-in replacement for SileroTeacher in the trainer: exposes ``.label(audio) -> [B,K]``,
-``.build_student_windows(audio)`` (delegated to the Silero wrapper), and ``.torch``. The
-ensemble target is sharper than Silero alone, so the student can exceed Silero on independent
-labels (breaking the single-teacher distillation ceiling).
+``.build_student_windows(audio)`` (delegated to the primary teacher), and ``.torch``. The
+ensemble target can be sharper than Silero alone, so the student may exceed Silero on
+independent labels.
+
+Construct directly with a teacher list, or via the convenience class methods.
 """
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -31,22 +33,35 @@ def combine_probs(prob_arrays: List, weights: List[float]):
 
 
 class MultiTeacher:
-    def __init__(self, silero_weight: float = 0.3, pyannote_weight: float = 0.7,
-                 hf_token: Optional[str] = None, device: str = "cpu") -> None:
-        self.silero = SileroTeacher(device=device)
-        from clearvad.distill.pyannote_teacher import PyannoteTeacher
-        self.pyannote = PyannoteTeacher(hf_token=hf_token, device=device)
-        self.w_silero = float(silero_weight)
-        self.w_pyannote = float(pyannote_weight)
+    def __init__(self, teachers: Sequence, weights: Sequence[float]) -> None:
+        if len(teachers) != len(weights):
+            raise ValueError("teachers and weights must be the same length")
+        self.teachers = list(teachers)
+        self.weights = list(weights)
+        self._primary = self.teachers[0]   # provides windows + torch
 
     @property
     def torch(self):
-        return self.silero.torch
+        return self._primary.torch
 
     def build_student_windows(self, audio):
-        return self.silero.build_student_windows(audio)
+        return self._primary.build_student_windows(audio)
 
     def label(self, audio):
-        ps = self.silero.label(audio)        # [B, K]
-        pp = self.pyannote.label(audio)      # [B, K]
-        return combine_probs([ps, pp], [self.w_silero, self.w_pyannote])
+        return combine_probs([t.label(audio) for t in self.teachers], self.weights)
+
+    # ------------------------------------------------------------ convenience
+    @classmethod
+    def silero_ten(cls, silero_weight: float = 0.5, ten_weight: float = 0.5,
+                   hop_size: int = 256, device: str = "cpu") -> "MultiTeacher":
+        from clearvad.distill.ten_teacher import TenVadTeacher
+        return cls([SileroTeacher(device=device), TenVadTeacher(hop_size=hop_size)],
+                   [silero_weight, ten_weight])
+
+    @classmethod
+    def silero_pyannote(cls, silero_weight: float = 0.5, pyannote_weight: float = 0.5,
+                        hf_token: Optional[str] = None, device: str = "cpu") -> "MultiTeacher":
+        from clearvad.distill.pyannote_teacher import PyannoteTeacher
+        return cls([SileroTeacher(device=device),
+                    PyannoteTeacher(hf_token=hf_token, device=device)],
+                   [silero_weight, pyannote_weight])

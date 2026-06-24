@@ -60,11 +60,12 @@ def main() -> None:
     ap.add_argument("--pos-weight", type=float, default=None, help="override speech-class pos_weight (both stages)")
     ap.add_argument("--no-amp", action="store_true")
     # multi-teacher (accuracy track)
-    ap.add_argument("--teacher", default="silero", choices=["silero", "multi"],
-                    help="'multi' = Silero+Pyannote ensemble (beats the Silero ceiling)")
+    ap.add_argument("--teacher", default="silero",
+                    choices=["silero", "ten", "multi-ten", "multi-pyannote"],
+                    help="'ten'=TEN VAD alone; 'multi-ten'=Silero+TEN; 'multi-pyannote'=Silero+Pyannote")
     ap.add_argument("--hf-token", default=None, help="HF token for gated pyannote model")
-    ap.add_argument("--silero-weight", type=float, default=0.3, help="multi-teacher Silero weight")
-    ap.add_argument("--pyannote-weight", type=float, default=0.7, help="multi-teacher Pyannote weight")
+    ap.add_argument("--silero-weight", type=float, default=0.5, help="ensemble Silero weight")
+    ap.add_argument("--second-weight", type=float, default=0.5, help="ensemble 2nd-teacher weight")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -72,11 +73,18 @@ def main() -> None:
     model = ClearVADModel.from_config(model_cfg)
     LOG.info("Model params by module: %s", model.count_by_module())
 
-    if args.teacher == "multi":
+    if args.teacher == "ten":
+        from clearvad.distill.ten_teacher import TenVadTeacher
+        LOG.info("Teacher: TEN VAD (alone)")
+        teacher = TenVadTeacher()
+    elif args.teacher == "multi-ten":
         from clearvad.distill.multi_teacher import MultiTeacher
-        LOG.info("Multi-teacher: Silero(%.2f) + Pyannote(%.2f)", args.silero_weight, args.pyannote_weight)
-        teacher = MultiTeacher(silero_weight=args.silero_weight,
-                               pyannote_weight=args.pyannote_weight, hf_token=args.hf_token)
+        LOG.info("Multi-teacher: Silero(%.2f) + TEN(%.2f)", args.silero_weight, args.second_weight)
+        teacher = MultiTeacher.silero_ten(args.silero_weight, args.second_weight)
+    elif args.teacher == "multi-pyannote":
+        from clearvad.distill.multi_teacher import MultiTeacher
+        LOG.info("Multi-teacher: Silero(%.2f) + Pyannote(%.2f)", args.silero_weight, args.second_weight)
+        teacher = MultiTeacher.silero_pyannote(args.silero_weight, args.second_weight, args.hf_token)
     else:
         teacher = SileroTeacher()
     gen = SyntheticAudioGenerator()
