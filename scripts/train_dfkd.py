@@ -61,8 +61,8 @@ def main() -> None:
     ap.add_argument("--no-amp", action="store_true")
     # multi-teacher (accuracy track)
     ap.add_argument("--teacher", default="silero",
-                    choices=["silero", "ten", "multi-ten", "multi-pyannote"],
-                    help="'ten'=TEN VAD alone; 'multi-ten'=Silero+TEN; 'multi-pyannote'=Silero+Pyannote")
+                    choices=["silero", "ten", "nemo", "multi-ten", "multi-nemo", "multi-pyannote"],
+                    help="'nemo'=NeMo MarbleNet alone; 'multi-nemo'=Silero+NeMo; etc.")
     ap.add_argument("--hf-token", default=None, help="HF token for gated pyannote model")
     ap.add_argument("--silero-weight", type=float, default=0.5, help="ensemble Silero weight")
     ap.add_argument("--second-weight", type=float, default=0.5, help="ensemble 2nd-teacher weight")
@@ -77,6 +77,14 @@ def main() -> None:
         from clearvad.distill.ten_teacher import TenVadTeacher
         LOG.info("Teacher: TEN VAD (alone)")
         teacher = TenVadTeacher()
+    elif args.teacher == "nemo":
+        from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
+        LOG.info("Teacher: NeMo MarbleNet (alone)")
+        teacher = NeMoMarbleTeacher()
+    elif args.teacher == "multi-nemo":
+        from clearvad.distill.multi_teacher import MultiTeacher
+        LOG.info("Multi-teacher: Silero(%.2f) + NeMo(%.2f)", args.silero_weight, args.second_weight)
+        teacher = MultiTeacher.silero_nemo(args.silero_weight, args.second_weight)
     elif args.teacher == "multi-ten":
         from clearvad.distill.multi_teacher import MultiTeacher
         LOG.info("Multi-teacher: Silero(%.2f) + TEN(%.2f)", args.silero_weight, args.second_weight)

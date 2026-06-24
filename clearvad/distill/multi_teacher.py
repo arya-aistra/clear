@@ -59,6 +59,13 @@ class MultiTeacher:
                    [silero_weight, ten_weight])
 
     @classmethod
+    def silero_nemo(cls, silero_weight: float = 0.5, nemo_weight: float = 0.5,
+                    device: str = "cpu") -> "MultiTeacher":
+        from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
+        return cls([SileroTeacher(device=device), NeMoMarbleTeacher()],
+                   [silero_weight, nemo_weight])
+
+    @classmethod
     def silero_pyannote(cls, silero_weight: float = 0.5, pyannote_weight: float = 0.5,
                         hf_token: Optional[str] = None, device: str = "cpu") -> "MultiTeacher":
         from clearvad.distill.pyannote_teacher import PyannoteTeacher
