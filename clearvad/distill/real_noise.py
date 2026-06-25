@@ -33,18 +33,32 @@ class RealNoiseSource:
     def __init__(self, source: str = "openslr", local_dir: Optional[str] = None,
                  root: str = "data/musan", subsets: Sequence[str] = ("noise", "music"),
                  buffer_seconds: float = 1800.0, sample_rate: int = SAMPLE_RATE,
-                 max_files: int = 400, seed: int = 1234) -> None:
+                 max_files: int = 400, seed: int = 1234,
+                 hf_repo: Optional[str] = None) -> None:
         self.sr = sample_rate
         target = int(buffer_seconds * self.sr)
         if local_dir:
             audio_root = Path(local_dir)
         elif source == "openslr":
             audio_root = self._ensure_musan(root, subsets)
+        elif source == "hf":
+            audio_root = self._ensure_hf(hf_repo, root)
         else:
             raise ValueError(f"unknown noise source {source!r}")
         self.buffer = self._load_buffer(audio_root, subsets, target, max_files, seed)
         LOG.info("Real-noise buffer: %.1f s (%d samples) from %s",
-                 len(self.buffer) / self.sr, len(self.buffer), local_dir or source)
+                 len(self.buffer) / self.sr, len(self.buffer), local_dir or hf_repo or source)
+
+    def _ensure_hf(self, hf_repo: Optional[str], root: str) -> Path:
+        """Download a noise dataset (e.g. DEMAND, ESC-50) from the HF hub → local wav dir."""
+        if not hf_repo:
+            raise ValueError("source='hf' requires hf_repo (e.g. 'voice-biomarkers/DEMAND-acoustic-noise')")
+        from huggingface_hub import snapshot_download
+        LOG.info("Downloading HF noise dataset %s ...", hf_repo)
+        path = snapshot_download(repo_id=hf_repo, repo_type="dataset",
+                                 local_dir=str(Path(root) / hf_repo.replace("/", "__")),
+                                 allow_patterns=["*.wav", "*.flac", "*.WAV", "*.FLAC"])
+        return Path(path)
 
     # ------------------------------------------------------------ acquisition
     def _ensure_musan(self, root: str, subsets) -> Path:

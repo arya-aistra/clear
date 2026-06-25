@@ -86,6 +86,36 @@ def roc_auc(probs: np.ndarray, label: np.ndarray) -> float:
     return float(auc)
 
 
+def pr_auc(probs: np.ndarray, label: np.ndarray) -> float:
+    """Average precision (area under the precision-recall curve). Threshold-free."""
+    probs = np.asarray(probs, dtype=np.float64).reshape(-1)
+    label = np.asarray(label).astype(bool).reshape(-1)
+    n_pos = int(label.sum())
+    if n_pos == 0:
+        return float("nan")
+    order = np.argsort(-probs, kind="mergesort")
+    l = label[order].astype(np.float64)
+    tp = np.cumsum(l)
+    fp = np.cumsum(1.0 - l)
+    precision = tp / np.maximum(tp + fp, 1e-12)
+    recall = tp / n_pos
+    # AP = sum over thresholds of (recall_i - recall_{i-1}) * precision_i
+    rec_prev = np.concatenate([[0.0], recall[:-1]])
+    return float(np.sum((recall - rec_prev) * precision))
+
+
+def tpr_at_fpr(probs: np.ndarray, label: np.ndarray, target_fpr: float = 0.315) -> float:
+    """TPR at a fixed FPR (the AVA-Speech-standard VAD metric; default FPR=0.315)."""
+    probs = np.asarray(probs, dtype=np.float64).reshape(-1)
+    label = np.asarray(label).astype(bool).reshape(-1)
+    pos, neg = probs[label], probs[~label]
+    if len(pos) == 0 or len(neg) == 0:
+        return float("nan")
+    # threshold so that FPR (fraction of negatives above threshold) == target_fpr
+    thr = np.quantile(neg, 1.0 - target_fpr)
+    return float(np.mean(pos >= thr))
+
+
 def _assign_tie_ranks(values: np.ndarray, ranks: np.ndarray) -> None:
     order = np.argsort(values, kind="mergesort")
     sorted_vals = values[order]

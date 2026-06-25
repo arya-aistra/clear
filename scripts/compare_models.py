@@ -57,15 +57,23 @@ def aggregate(dicts, keys):
 
 
 def eval_model(prob_fn, seqs_audio, seqs_labels, seqs_gaps, thr=0.5):
+    from clearvad.evaluation.metrics import pr_auc, roc_auc, tpr_at_fpr
     per_seq, gap_det = [], []
+    pooled_p, pooled_l = [], []     # pool all frames for threshold-free metrics (standard practice)
     for audio, labels, gaps in zip(seqs_audio, seqs_labels, seqs_gaps):
         probs = prob_fn(audio)
         K = min(len(probs), len(labels))
         per_seq.append(summarize(probs[:K], labels[:K], threshold=thr))
         gap_det.append(short_silence_detection(probs_to_labels(probs[:K], thr),
                                                [(s, e, d) for (s, e, d) in gaps]))
-    agg = aggregate(per_seq, ["f1", "far", "mr", "auc",
-                              "onset_latency_mean_ms", "endpoint_latency_mean_ms"])
+        pooled_p.append(np.asarray(probs[:K])); pooled_l.append(np.asarray(labels[:K]))
+    agg = aggregate(per_seq, ["f1", "far", "mr", "onset_latency_mean_ms",
+                              "endpoint_latency_mean_ms"])
+    pp = np.concatenate(pooled_p); pl = np.concatenate(pooled_l).astype(bool)
+    # threshold-free metrics pooled over all frames (comparable to published VAD numbers)
+    agg["auroc"] = round(roc_auc(pp, pl), 4)
+    agg["pr_auc"] = round(pr_auc(pp, pl), 4)
+    agg["tpr_at_fpr0.315"] = round(tpr_at_fpr(pp, pl, 0.315), 4)
     durs = sorted({d for gd in gap_det for d in gd})
     ss = {f"{int(d)}ms": round(float(np.mean([gd[d] for gd in gap_det if d in gd])), 4)
           for d in durs}
@@ -78,6 +86,7 @@ def main() -> None:
     ap.add_argument("--model-config", default="configs/model/clearvad_base.yaml")
     ap.add_argument("--cache", default="data/eval/controlled_eval.npz")
     ap.add_argument("--out", default="reports/phase8/comparison.json")
+    ap.add_argument("--webrtc", action="store_true", help="add WebRTC VAD baseline (pip webrtcvad)")
     args = ap.parse_args()
 
     data = np.load(args.cache, allow_pickle=True)
@@ -99,27 +108,40 @@ def main() -> None:
 
     cv_params = model.parameter_count()
     cv_size_mb = round(cv_params * 4 / 1e6, 4)   # FP32
-    result = {
-        "silero": {"metrics": sil_agg, "short_silence": sil_ss,
-                   "params": 309633, "fp32_size_mb": 1.2896},
-        "clearvad_fp32": {"metrics": cv_agg, "short_silence": cv_ss,
-                          "params": cv_params, "fp32_size_mb": cv_size_mb},
-    }
+    models = {"silero": sil_agg, "clearvad": cv_agg}
+    sslist = {"silero": sil_ss, "clearvad": cv_ss}
+
+    # optional WebRTC baseline (binary; AUROC/PR-AUC undefined for hard 0/1 output)
+    if args.webrtc:
+        try:
+            LOG.info("Scoring WebRTC VAD baseline...")
+            from clearvad.evaluation.webrtc_baseline import webrtc_probs
+            w_agg, w_ss = eval_model(lambda a: webrtc_probs(a), audio, labels, gaps)
+            models["webrtc"] = w_agg
+            sslist["webrtc"] = w_ss
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("WebRTC baseline skipped: %r", exc)
+
+    result = {"clearvad_params": cv_params, "clearvad_fp32_size_mb": cv_size_mb,
+              "silero_params": 309633, "silero_fp32_size_mb": 1.2896,
+              "models": {m: {"metrics": models[m], "short_silence": sslist[m]} for m in models}}
     write_json(result, args.out)
 
-    # human-readable table
-    md = ["# ClearVAD vs Silero — independent eval set\n",
-          "| metric | Silero | ClearVAD (FP32) |",
-          "|--------|--------|-----------------|"]
-    for k in ["f1", "far", "mr", "auc", "onset_latency_mean_ms", "endpoint_latency_mean_ms"]:
-        md.append(f"| {k} | {sil_agg.get(k)} | {cv_agg.get(k)} |")
-    md.append(f"| params | 309,633 | {cv_params:,} |")
-    md.append(f"| FP32 size (MB) | 1.29 | {cv_size_mb} |")
-    md.append("\n## Short-silence detection (fraction of gaps detected)\n")
-    md.append("| gap | Silero | ClearVAD |")
-    md.append("|-----|--------|----------|")
-    for d in sorted(set(sil_ss) | set(cv_ss)):
-        md.append(f"| {d} | {sil_ss.get(d)} | {cv_ss.get(d)} |")
+    # human-readable multi-model table
+    cols = list(models.keys())
+    metric_keys = ["f1", "auroc", "pr_auc", "tpr_at_fpr0.315", "far", "mr",
+                   "onset_latency_mean_ms", "endpoint_latency_mean_ms"]
+    md = ["# VAD comparison — independent eval set\n",
+          "| metric | " + " | ".join(cols) + " |",
+          "|" + "---|" * (len(cols) + 1)]
+    for k in metric_keys:
+        md.append(f"| {k} | " + " | ".join(str(models[m].get(k)) for m in cols) + " |")
+    md.append("\n## Short-silence detection (fraction of true gaps detected)\n")
+    md.append("| gap | " + " | ".join(cols) + " |")
+    md.append("|" + "---|" * (len(cols) + 1))
+    all_durs = sorted({d for s in sslist.values() for d in s})
+    for d in all_durs:
+        md.append(f"| {d} | " + " | ".join(str(sslist[m].get(d)) for m in cols) + " |")
     Path(args.out).with_suffix(".md").write_text("\n".join(md), encoding="utf-8")
 
     LOG.info("Silero   : F1=%.3f FAR=%.3f MR=%.3f endpoint=%.1fms params=309,633 size=1.29MB",
