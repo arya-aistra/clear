@@ -92,6 +92,8 @@ def main() -> None:
     ap.add_argument("--noise-hf-repo", default="voice-biomarkers/DEMAND-acoustic-noise",
                     help="HF noise dataset id when --noise-source hf")
     ap.add_argument("--noise-buffer-seconds", type=float, default=1800.0)
+    ap.add_argument("--augment", action="store_true",
+                    help="dataset-free augmentation (synthetic reverb / codec / gain) on train clips")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -186,7 +188,7 @@ def main() -> None:
                 real_source, gen, pool_size=int(cfg.get("pool_size", 2048)),
                 clip_chunks=int(cfg.get("chunks_per_sample", 64)), teacher=aux,
                 true_weight=args.true_weight, label_smooth=args.label_smooth,
-                noise_source=noise_source)
+                noise_source=noise_source, augment=args.augment)
 
     s1_cfg = _apply_overrides(load_yaml(args.stage1), args.stage1_steps)
     summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1", pool=make_pool(s1_cfg))
