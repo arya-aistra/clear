@@ -1,0 +1,33 @@
+# LiquidVAD base — same frontend/encoder/head as ClearVAD, CfC temporal core (the novel hybrid).
+name: liquidvad_base
+arch: cfc                    # -> build_model() picks LiquidVADModel
+
+frontend:
+  in_channels: 1
+  out_channels: 258          # 129 real + 129 imag -> 129 magnitude features
+  kernel_size: 256
+  stride: 128
+  learnable: true
+
+encoder:
+  channel_schedule: [129, 128, 64, 64, 128]   # encoder out (128) must == cfc.d_model
+  depthwise_separable: true
+  kernel_size: 3
+
+cfc:
+  d_model: 128               # == encoder out channels and head in_channels
+  hidden: 128                # CfC hidden state width
+  layers: 1                  # stacked CfC cells (1 keeps it tiny; bump to 2 for capacity)
+  backbone_units: 128        # shared backbone width (defaults to hidden if null)
+  dropout: 0.0
+
+head:
+  in_channels: 128
+  out_channels: 1
+  reduction: mean
+
+audio:
+  sample_rate: 16000
+  chunk_samples: 512
+  context_samples: 64
+  total_input_samples: 576

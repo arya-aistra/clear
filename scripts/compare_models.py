@@ -24,7 +24,7 @@ import torch  # noqa: E402
 from clearvad import CHUNK_SAMPLES, CONTEXT_SAMPLES  # noqa: E402
 from clearvad.evaluation.eval_dataset import short_silence_detection  # noqa: E402
 from clearvad.evaluation.metrics import probs_to_labels, summarize  # noqa: E402
-from clearvad.model.clearvad_model import ClearVADModel  # noqa: E402
+from clearvad.model.factory import build_model  # noqa: E402
 from clearvad.model.silero_compat import SileroVAD  # noqa: E402
 from clearvad.utils.config import load_yaml  # noqa: E402
 from clearvad.utils.logging_utils import get_logger, write_json  # noqa: E402
@@ -102,7 +102,7 @@ def main() -> None:
 
     # ClearVAD
     LOG.info("Scoring ClearVAD (%s)...", args.checkpoint)
-    model = ClearVADModel.from_config(load_yaml(args.model_config)).eval()
+    model = build_model(load_yaml(args.model_config)).eval()
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     cv_agg, cv_ss = eval_model(lambda a: clearvad_probs(model, a), audio, labels, gaps)
 

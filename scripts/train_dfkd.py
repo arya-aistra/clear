@@ -25,7 +25,7 @@ import torch  # noqa: E402
 from clearvad.distill.synthetic_gen import SyntheticAudioGenerator  # noqa: E402
 from clearvad.distill.teacher import SileroTeacher  # noqa: E402
 from clearvad.distill.trainer import DFKDTrainer  # noqa: E402
-from clearvad.model.clearvad_model import ClearVADModel  # noqa: E402
+from clearvad.model.factory import build_model  # noqa: E402
 from clearvad.utils.config import load_yaml, set_global_seed  # noqa: E402
 from clearvad.utils.logging_utils import get_logger, write_json  # noqa: E402
 
@@ -92,8 +92,9 @@ def main() -> None:
 
     set_global_seed(1234)
     model_cfg = load_yaml(args.model_config)
-    model = ClearVADModel.from_config(model_cfg)
-    LOG.info("Model params by module: %s", model.count_by_module())
+    model = build_model(model_cfg)
+    LOG.info("Model arch=%s, params by module: %s", model_cfg.get("arch", "gssm"),
+             model.count_by_module())
 
     if args.teacher == "nemo":
         from clearvad.distill.nemo_teacher import NeMoMarbleTeacher
