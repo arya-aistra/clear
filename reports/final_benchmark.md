@@ -49,6 +49,24 @@ Short-silence detection (noisy eval, fraction of *true* inserted gaps detected):
 | 200 ms | 0.67 | **0.77** |
 | 500 ms | 0.94 | **0.96** |
 
+## Held-out noise (test-clean + **DEMAND** @ 0–12 dB) — noise NOT seen in training (MUSAN)
+Standard VAD metrics (pooled), comparable to published numbers:
+
+| metric | Silero | ClearVAD | WebRTC |
+|--------|--------|----------|--------|
+| F1 | 0.850 | **0.930** | (pip webrtcvad) |
+| AUROC | 0.859 | **0.878** | — |
+| TPR@FPR=0.315 | 0.809 | **0.920** | — |
+| PR-AUC | **0.972** | 0.967 | — |
+| FAR | **0.216** | 0.340 | — |
+| MR | 0.232 | **0.079** | — |
+| onset / endpoint (ms) | 114 / 40 | **21 / 34** | — |
+
+**Flag 2 (noise generalization) closed:** ClearVAD trained on MUSAN beats Silero on *unseen*
+DEMAND noise on F1, AUROC, TPR@FPR, MR, latency. FAR is higher at the default threshold but
+AUROC dominates → a calibrated threshold trades ClearVAD's large MR headroom for lower FAR.
+(`pip install webrtcvad` + `--webrtc` adds the WebRTC baseline column.)
+
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
    Part of the raw F1 gap is convention-alignment; the **AUC, miss-rate, and short-silence-on-true-
