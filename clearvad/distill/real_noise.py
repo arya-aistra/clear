@@ -50,15 +50,36 @@ class RealNoiseSource:
                  len(self.buffer) / self.sr, len(self.buffer), local_dir or hf_repo or source)
 
     def _ensure_hf(self, hf_repo: Optional[str], root: str) -> Path:
-        """Download a noise dataset (e.g. DEMAND, ESC-50) from the HF hub → local wav dir."""
+        """Download a noise dataset (DEMAND, ESC-50, ...) from the HF hub → local wav dir.
+
+        Handles both loose wav/flac repos and archive-based ones (DEMAND ships per-environment
+        .zip files); extracts any archives, then the buffer loader globs the wavs recursively.
+        """
         if not hf_repo:
             raise ValueError("source='hf' requires hf_repo (e.g. 'voice-biomarkers/DEMAND-acoustic-noise')")
+        import tarfile
+        import zipfile
         from huggingface_hub import snapshot_download
         LOG.info("Downloading HF noise dataset %s ...", hf_repo)
-        path = snapshot_download(repo_id=hf_repo, repo_type="dataset",
-                                 local_dir=str(Path(root) / hf_repo.replace("/", "__")),
-                                 allow_patterns=["*.wav", "*.flac", "*.WAV", "*.FLAC"])
-        return Path(path)
+        path = Path(snapshot_download(
+            repo_id=hf_repo, repo_type="dataset",
+            local_dir=str(Path(root) / hf_repo.replace("/", "__")),
+            allow_patterns=["*.wav", "*.flac", "*.WAV", "*.FLAC",
+                            "*.zip", "*.tar", "*.tar.gz", "*.tgz"]))
+        for arc in list(path.rglob("*.zip")):
+            try:
+                with zipfile.ZipFile(arc) as z:
+                    z.extractall(arc.parent)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("zip extract failed %s: %r", arc.name, exc)
+        for arc in (list(path.rglob("*.tar.gz")) + list(path.rglob("*.tgz"))
+                    + list(path.rglob("*.tar"))):
+            try:
+                with tarfile.open(arc) as t:
+                    t.extractall(arc.parent)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("tar extract failed %s: %r", arc.name, exc)
+        return path
 
     # ------------------------------------------------------------ acquisition
     def _ensure_musan(self, root: str, subsets) -> Path:
@@ -89,7 +110,9 @@ class RealNoiseSource:
         if not files:
             files = [p for ext in ("*.wav", "*.flac") for p in Path(audio_root).rglob(ext)]
         if not files:
-            raise FileNotFoundError(f"No noise audio under {audio_root}")
+            raise FileNotFoundError(
+                f"No noise audio (.wav/.flac) under {audio_root}. If this is an HF repo with an "
+                f"unusual layout, download/extract it manually and pass --noise-dir <that folder>.")
         rng = np.random.default_rng(seed)
         rng.shuffle(files)
         chunks, total = [], 0
