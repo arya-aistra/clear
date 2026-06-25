@@ -7,13 +7,15 @@ from any teacher). Single CPU thread, ONNX Runtime. ClearVAD trained with **no h
 > accuracy numbers below are **convention-biased** (intra-speech pauses labeled speech) and must
 > NOT be cited as an accuracy win. On a frame-accurate eval (forced alignment), the original
 > segment-trained model scored AUROC **0.514 (chance)**; the latching defect was real. After
-> retraining on frame-accurate labels (final model `checkpoints_fa2`), ClearVAD is a genuine
-> frame-level VAD: **AUROC 0.877 vs Silero 0.972**, **F1 0.914 vs 0.958** on identical labels
-> (see "Frame-accurate eval"). It clearly beats WebRTC (0.776) but **does NOT beat Silero on
-> accuracy**, and the gap is intrinsic (capacity of a 220k-param data-free model). Defensible
-> claims: **4.5× smaller, INT8-deployable (Silero can't), data-free, faster onset/endpoint
-> latency — at competitive frame-level accuracy.** Lead with deployability + competitive
-> accuracy, never "more accurate than Silero."
+> retraining on frame-accurate labels (best model `checkpoints_fa`), ClearVAD is a genuine
+> frame-level VAD: **AUROC 0.915 vs Silero 0.972**, **F1 0.917 vs 0.958** on identical labels
+> (see "Frame-accurate eval"). It clearly beats WebRTC (0.776) and **beats Silero on FAR (0.199
+> vs 0.224), endpoint latency (72 vs 112 ms), and short pauses ≤250 ms** — but Silero still leads
+> AUROC/F1, so **do NOT claim accuracy superiority**. (The remaining 5.7 pt AUROC gap is NOT
+> proven intrinsic — the one pass that suggested so was a confounded misfire; untried levers
+> remain: Silero soft-label blend, clean scale-up, capacity bump.) Defensible claims: **4.5×
+> smaller, INT8-deployable (Silero can't), data-free, lower FAR + faster latency — at competitive
+> frame-level accuracy.** Lead with deployability + competitive accuracy.
 
 ## Headline (segment-level labels — accuracy rows are convention-biased, see warning above)
 
@@ -112,37 +114,38 @@ ClearVAD, so it is generous to Silero. Pooled, threshold 0.5:
 | MR | **0.005** | 0.092 | 0.000 | 0.016 |
 | endpoint (ms) | 152 | **87** | 220 | 276 |
 
-### Progression of the frame-accurate AUROC (identical labels per column convention)
+### Frame-accurate progression — best model is `checkpoints_fa`, NOT fa2
 
-| ClearVAD variant | label convention | ClearVAD AUROC | Silero AUROC | verdict |
-|------------------|------------------|----------------|--------------|---------|
-| orig. segment-trained | smooth 100 | 0.514 (chance) | 0.844 | broken (latching) |
-| `checkpoints_fa` (frame-acc.) | smooth 100 | 0.849 | 0.915 | competitive |
-| `checkpoints_fa2` (+pad40, 2× data, +steps) | pad 40 + smooth 100 | **0.877** | 0.972 | competitive |
+Head-to-head on the **identical** pad40+smooth100 eval (the only valid comparison — earlier
+cross-convention comparisons were misleading):
 
-Final model `checkpoints_fa2` on the most-correct convention (pad 40 corrects MMS_FA edge-trimming +
-smooth 100 standard min-silence), all three scored on the **same** labels:
+| metric | Silero | **ClearVAD `fa`** | ClearVAD `fa2` | WebRTC |
+|--------|--------|-------------------|----------------|--------|
+| AUROC | **0.972** | 0.915 | 0.877 | 0.776 |
+| F1 | **0.958** | 0.917 | 0.914 | 0.922 |
+| PR-AUC | **0.989** | 0.964 | 0.938 | 0.867 |
+| TPR@FPR=0.315 | **0.993** | 0.947 | 0.926 | 0.991 |
+| FAR | 0.224 | **0.199** | 0.298 | 0.516 |
+| MR | **0.016** | 0.108 | 0.088 | 0.002 |
+| onset / endpoint (ms) | 28 / 112 | 29 / **72** | 20 / 103 | **4** / 180 |
 
-| metric | Silero | **ClearVAD fa2** | WebRTC |
-|--------|--------|------------------|--------|
-| AUROC | **0.972** | 0.877 | 0.776 |
-| F1 | **0.958** | 0.914 | 0.922 |
-| PR-AUC | **0.989** | 0.938 | 0.867 |
-| TPR@FPR=0.315 | **0.993** | 0.926 | 0.991 |
-| FAR | **0.224** | 0.298 | 0.516 |
-| MR | **0.016** | 0.088 | 0.002 |
-| onset / endpoint (ms) | 28 / 112 | **20 / 103** | **4** / 180 |
+`fa` also beats Silero on short-pause detection ≤250 ms (96 ms 0.47 vs 0.23; 128 ms 0.59 vs 0.45;
+192 ms 0.88 vs 0.71); Silero leads the 280–480 ms band.
 
-**Verdict (final):** Frame-accurate retraining turned ClearVAD from chance (0.514) into a genuine
-frame-level VAD (0.877) that clearly beats the WebRTC baseline. The targeted pass (span-padding +
-2× data + more steps) lifted absolute discrimination (0.849→0.877) but did **not** close the gap to
-Silero — the miss-rate barely moved (0.092→0.088), showing ClearVAD's ~9 % speech under-detection is
-**intrinsic** (a 220k-param data-free model's capacity limit), not an alignment-label artifact; and
-the same label refinements raised Silero more (0.915→0.972). **Silero remains the more accurate VAD
-(AUROC 0.972 vs 0.877, F1 0.958 vs 0.914).** ClearVAD's honest, defensible position: **competitive
-frame-level accuracy at 4.5× smaller, INT8-deployable (Silero can't), data-free, faster onset/endpoint
-latency.** Do not claim accuracy superiority. Closing the remaining gap would require a larger model
-or real labeled data — abandoning the size / data-free premise. Raw/strict eval (no pad, no smooth):
+**Verdict (current best = `checkpoints_fa`):** Frame-accurate retraining turned ClearVAD from chance
+(AUROC 0.514) into a genuine frame-level VAD: **AUROC 0.915 vs Silero 0.972 (5.7 pt gap)**, and `fa`
+**beats** Silero on FAR (0.199 vs 0.224), endpoint latency (72 vs 112 ms), and short pauses ≤250 ms.
+
+**Correction (retracts the earlier "intrinsic ceiling" claim):** the "targeted pass" model `fa2`
+(pad-40 *training* labels + 2× data + pos_weight 1.5) is WORSE, not better — AUROC 0.877 < `fa` 0.915.
+Padding the *training* labels taught wider speech boundaries (FAR 0.199→0.298). The earlier
+"gap is intrinsic" conclusion was drawn from this confounded, counterproductive run and is **retracted**
+— the ceiling was never cleanly tested. Untried, premise-preserving accuracy levers remain:
+(1) Silero soft-label aux-teacher blended with the true frame-accurate labels
+(`--aux-teacher silero --true-weight 0.6`) — `fa` is pure supervised and has never seen Silero's soft
+targets; (2) a clean data + steps scale-up WITHOUT padding/pos_weight; (3) a modest capacity bump
+(fa is 220k params < Silero 309k). **Honest stance: Silero is currently more accurate (AUROC), but
+ClearVAD is strongly competitive and we have NOT hit the ceiling.** Raw/strict eval (no pad/smooth):
 fa F1 0.826, FAR 0.445, endpoint 63 ms.
 
 ## Honest caveats (so the result survives scrutiny)
