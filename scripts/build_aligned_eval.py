@@ -62,6 +62,15 @@ def main() -> None:
     ap.add_argument("--cache", default="data/eval/aligned_eval.npz")
     ap.add_argument("--out", default="reports/phase8/aligned_eval_info.json")
     ap.add_argument("--device", default="cuda")
+    # HARD + frame-accurate: mix held-out real noise (e.g. DEMAND) across the whole sequence at a
+    # random SNR (speech-in-noise + noisy silence). Labels are unchanged. Tests robustness/general-
+    # ization — where a small model can beat Silero, vs clean LibriSpeech (Silero's home turf).
+    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local", "hf"])
+    ap.add_argument("--noise-dir", default=None)
+    ap.add_argument("--noise-hf-repo", default="voice-biomarkers/DEMAND-acoustic-noise")
+    ap.add_argument("--snr-min", type=float, default=0.0)
+    ap.add_argument("--snr-max", type=float, default=12.0)
+    ap.add_argument("--seed", type=int, default=4242)
     args = ap.parse_args()
 
     ls_dir = Path(args.ls_dir)
@@ -73,6 +82,15 @@ def main() -> None:
     utts = find_utterances(ls_dir, args.max_utts)
     LOG.info("Aligning %d utterances (min_silence=%.0fms, pad=%.0fms)...", len(utts),
              args.min_silence_ms, args.pad_ms)
+
+    noise_source, noise_rng = None, np.random.default_rng(args.seed)
+    if args.noise_source != "none" or args.noise_dir:
+        from clearvad.distill.real_noise import RealNoiseSource
+        kind = "local" if args.noise_dir else ("hf" if args.noise_source == "hf" else "openslr")
+        noise_source = RealNoiseSource(source=kind, local_dir=args.noise_dir,
+                                       hf_repo=args.noise_hf_repo, buffer_seconds=1200.0)
+        LOG.info("Mixing held-out noise (%s) at SNR %.0f-%.0f dB into eval sequences",
+                 args.noise_dir or args.noise_source, args.snr_min, args.snr_max)
 
     def utt_labels(flac: Path, text: str):
         """Return (audio[L], sample_speech_mask[L]) with frame-accurate speech from alignment."""
@@ -104,6 +122,11 @@ def main() -> None:
             audio = np.concatenate(buf_a); smask = np.concatenate(buf_m)
             K = len(audio) // CHUNK_SAMPLES
             audio = audio[:K * CHUNK_SAMPLES]
+            if noise_source is not None:                 # speech-in-noise + noisy silence (hard)
+                from clearvad.utils.audio import mix_at_snr
+                noise = noise_source.sample(len(audio), noise_rng)
+                audio, _ = mix_at_snr(audio, noise, float(noise_rng.uniform(args.snr_min, args.snr_max)))
+                audio = audio.astype(np.float32)
             labels = np.array([1.0 if smask[k * CHUNK_SAMPLES:(k + 1) * CHUNK_SAMPLES].mean() >= 0.5
                                else 0.0 for k in range(K)], dtype=np.float32)
             # record true-silence gaps (runs of 0) for the short-silence metric
