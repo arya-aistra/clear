@@ -56,6 +56,12 @@ def main() -> None:
     ap.add_argument("--hf-split", default="train.clean.100")
     ap.add_argument("--local-speech-dir", default=None, help="use a local wav/flac dir")
     ap.add_argument("--buffer-seconds", type=float, default=1800.0)
+    # FRAME-ACCURATE LABELS (Flag-1 fix): force-align training speech so intra-speech pauses are
+    # labeled silence -> trains a real frame-level VAD, not a speech-region detector.
+    ap.add_argument("--aligned-labels", action="store_true",
+                    help="force-align training speech for frame-accurate labels (constructed mode)")
+    ap.add_argument("--align-min-silence-ms", type=float, default=100.0,
+                    help="fill interior silence gaps shorter than this (co-articulation, not pauses)")
     ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
     ap.add_argument("--pos-weight", type=float, default=None, help="override speech-class pos_weight (both stages)")
     ap.add_argument("--no-amp", action="store_true")
@@ -104,14 +110,16 @@ def main() -> None:
     gen = SyntheticAudioGenerator()
 
     real_source = None
-    if args.use_real or args.local_speech_dir:
+    if args.use_real or args.local_speech_dir or args.aligned_labels:
         from clearvad.distill.real_data import RealSpeechSource
         source = "local" if args.local_speech_dir else args.speech_source
         real_source = RealSpeechSource(
             source=source, local_dir=args.local_speech_dir,
             ls_url=args.ls_url, ls_root=args.ls_root,
             hf_dataset=args.hf_dataset, hf_config=args.hf_config, hf_split=args.hf_split,
-            buffer_seconds=args.buffer_seconds)
+            buffer_seconds=args.buffer_seconds,
+            aligned=args.aligned_labels, align_min_silence_ms=args.align_min_silence_ms,
+            align_device=args.device)
 
     trainer = DFKDTrainer(model, teacher, gen, device=args.device, out_dir=args.out_dir,
                           real_source=real_source, use_amp=not args.no_amp)

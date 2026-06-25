@@ -27,13 +27,19 @@ def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
                    gen, speech_seg_ms=(300, 1200), silence_ms=(200, 900),
                    noise_prob: float = 0.6, snr_range=(0.0, 20.0),
                    normalize_dbfs: float = -23.0, noise_source=None,
-                   bg_prob: float = 0.6, bg_level=(0.03, 0.4)) -> Tuple[np.ndarray, np.ndarray]:
+                   bg_prob: float = 0.6, bg_level=(0.03, 0.4),
+                   speech_mask=None) -> Tuple[np.ndarray, np.ndarray]:
     """Build one clip = alternating speech / non-speech -> (audio[L], labels[K] bool).
 
     noise_source (optional, with .sample(n, rng)) supplies REAL noise (e.g. MUSAN); else
     synthetic noise is used. Speech segments are mixed with noise at a random SNR (the hard
     speech-in-noise case); non-speech segments get real background noise (labeled 0). Any
     single segment is capped at half the clip, so every clip contains BOTH speech and non-speech.
+
+    speech_mask (optional, parallel to `buffer`): FRAME-ACCURATE speech labels (1=speech) from
+    forced alignment. When given, a placed speech segment is labeled by the mask slice — so
+    intra-speech pauses become silence labels (the Flag-1 fix). When None, segments are all-speech
+    (legacy segment-level convention).
     """
     audio = np.zeros(n_samples, dtype=np.float32)
     sample_lab = np.zeros(n_samples, dtype=np.float32)
@@ -54,7 +60,10 @@ def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
             if rng.random() < noise_prob:                # speech-in-noise (hard, labeled speech)
                 clip, _ = mix_at_snr(clip, _noise(seg), float(rng.uniform(*snr_range)))
             audio[pos:pos + seg] = clip
-            sample_lab[pos:pos + seg] = 1.0
+            if speech_mask is not None:                  # frame-accurate: pauses inside -> silence
+                sample_lab[pos:pos + seg] = speech_mask[s:s + seg]
+            else:
+                sample_lab[pos:pos + seg] = 1.0
             pos += seg
         else:
             seg = int(rng.uniform(*silence_ms) / 1000 * 16000)
@@ -85,6 +94,7 @@ class ConstructedDataPool:
         self.real = real_source
         self.gen = generator
         self.noise_source = noise_source        # optional REAL noise (MUSAN) for hard data
+        self.speech_mask = getattr(real_source, "speech_mask", None)  # frame-accurate labels (Flag-1 fix)
         self.teacher = teacher                  # optional auxiliary soft-label teacher
         self.pool_size = pool_size
         self.clip_chunks = clip_chunks
@@ -100,12 +110,14 @@ class ConstructedDataPool:
         import torch
         rng = np.random.default_rng(seed)
         audio = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng, self.gen,
-                                          noise_source=self.noise_source)[0]
+                                          noise_source=self.noise_source,
+                                          speech_mask=self.speech_mask)[0]
                           for _ in range(self.pool_size)])
         # recompute labels deterministically alongside audio (same rng stream order)
         rng2 = np.random.default_rng(seed)
         labels = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng2, self.gen,
-                                          noise_source=self.noise_source)[1]
+                                          noise_source=self.noise_source,
+                                          speech_mask=self.speech_mask)[1]
                            for _ in range(self.pool_size)])
         audio_t = torch.from_numpy(audio)
         true = torch.from_numpy(labels)
@@ -150,11 +162,13 @@ class ConstructedDataPool:
             import torch
             rng = np.random.default_rng(seed)
             audio = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng, self.gen,
-                                              noise_source=self.noise_source)[0]
+                                              noise_source=self.noise_source,
+                                              speech_mask=self.speech_mask)[0]
                               for _ in range(n)])
             rng2 = np.random.default_rng(seed)
             labels = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng2, self.gen,
-                                              noise_source=self.noise_source)[1]
+                                              noise_source=self.noise_source,
+                                              speech_mask=self.speech_mask)[1]
                                for _ in range(n)])
             windows = self._windows(torch.from_numpy(audio))
             self._holdout = (windows, torch.from_numpy(labels))

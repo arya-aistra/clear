@@ -18,16 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np  # noqa: E402
 
 from clearvad import CHUNK_SAMPLES, SAMPLE_RATE  # noqa: E402
+from clearvad.distill.forced_align import ForcedAligner  # noqa: E402
 from clearvad.utils.audio import load_audio  # noqa: E402
 from clearvad.utils.logging_utils import get_logger, write_json  # noqa: E402
 
@@ -48,59 +47,35 @@ def find_utterances(ls_dir: Path, max_utts: int):
     return items
 
 
-def normalize(text: str) -> List[str]:
-    """MMS_FA wants lowercase latin words, no punctuation."""
-    text = re.sub(r"[^a-z' ]", " ", text.lower())
-    return [w for w in text.split() if w]
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ls-dir", default="data/librispeech/LibriSpeech/test-clean")
     ap.add_argument("--max-utts", type=int, default=300)
     ap.add_argument("--utts-per-seq", type=int, default=4)
     ap.add_argument("--gap-ms", type=float, default=400.0, help="true silence between utterances")
+    ap.add_argument("--min-silence-ms", type=float, default=0.0,
+                    help="fill interior gaps shorter than this (0 = strict/raw eval). "
+                         "Match the training value for an apples-to-apples comparison.")
     ap.add_argument("--cache", default="data/eval/aligned_eval.npz")
     ap.add_argument("--out", default="reports/phase8/aligned_eval_info.json")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
-
-    import torch
-    import torchaudio
 
     ls_dir = Path(args.ls_dir)
     if not ls_dir.exists():
         raise SystemExit(f"{ls_dir} not found — run build_eval_set.py --ls-url test-clean first "
                          "to download/extract LibriSpeech.")
 
-    LOG.info("Loading MMS_FA forced aligner...")
-    bundle = torchaudio.pipelines.MMS_FA
-    device = args.device if torch.cuda.is_available() else "cpu"
-    model = bundle.get_model().to(device).eval()
-    tokenizer = bundle.get_tokenizer()
-    aligner = bundle.get_aligner()
-
+    aligner = ForcedAligner(device=args.device)
     utts = find_utterances(ls_dir, args.max_utts)
-    LOG.info("Aligning %d utterances...", len(utts))
+    LOG.info("Aligning %d utterances (min_silence=%.0fms)...", len(utts), args.min_silence_ms)
 
     def utt_labels(flac: Path, text: str):
         """Return (audio[L], sample_speech_mask[L]) with frame-accurate speech from alignment."""
         wav = load_audio(flac, SAMPLE_RATE)
-        words = normalize(text)
-        if not words:
+        mask = aligner.speech_mask(wav, text, min_silence_ms=args.min_silence_ms, sr=SAMPLE_RATE)
+        if mask is None:
             return None
-        wt = torch.from_numpy(wav).unsqueeze(0).to(device)
-        with torch.inference_mode():
-            emission, _ = model(wt)
-        token_spans = aligner(emission[0], tokenizer(words))
-        ratio = wav.shape[0] / emission.shape[1]
-        mask = np.zeros(wav.shape[0], dtype=np.float32)
-        for spans in token_spans:                      # one entry per word
-            if not spans:
-                continue
-            s = int(spans[0].start * ratio)
-            e = int(spans[-1].end * ratio)
-            mask[max(s, 0):min(e, len(mask))] = 1.0
         return wav, mask
 
     # build sequences by concatenating utterances with true-silence gaps

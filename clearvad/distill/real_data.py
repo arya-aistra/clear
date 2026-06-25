@@ -45,13 +45,24 @@ class RealSpeechSource:
         buffer_seconds: float = 1800.0,
         normalize_dbfs: Optional[float] = -23.0,
         seed: int = 1234,
+        # FRAME-ACCURATE LABELS: force-align each utterance -> a speech_mask parallel to buffer,
+        # so intra-speech pauses are labeled silence (the Flag-1 fix). LibriSpeech layout only.
+        aligned: bool = False,
+        align_min_silence_ms: float = 100.0,
+        align_device: str = "cuda",
     ) -> None:
         self.sr = sample_rate
         self.normalize_dbfs = normalize_dbfs
+        self.speech_mask = None     # set in aligned mode: [len(buffer)] float32, 1=speech
         if local_dir:
             source = "local"
         target = int(buffer_seconds * self.sr)
-        if source == "local":
+        if aligned:
+            if source not in ("torchaudio", "local"):
+                raise ValueError("aligned=True needs a LibriSpeech layout (source torchaudio/local)")
+            self.buffer = self._from_aligned(source, local_dir, ls_root, ls_url, target,
+                                             align_min_silence_ms, align_device)
+        elif source == "local":
             self.buffer = self._from_local_dir(local_dir, target)
         elif source == "torchaudio":
             self.buffer = self._from_torchaudio(ls_root, ls_url, target)
@@ -59,8 +70,10 @@ class RealSpeechSource:
             self.buffer = self._from_hf(hf_dataset, hf_config, hf_split, target)
         else:
             raise ValueError(f"unknown real-speech source: {source!r}")
-        LOG.info("Real-speech buffer: %.1f s (%d samples) from source=%s",
-                 len(self.buffer) / self.sr, len(self.buffer), source)
+        LOG.info("Real-speech buffer: %.1f s (%d samples) from source=%s%s",
+                 len(self.buffer) / self.sr, len(self.buffer), source,
+                 (f", frame-accurate speech_frac={float(self.speech_mask.mean()):.3f}"
+                  if self.speech_mask is not None else ""))
 
     # ------------------------------------------------------------ sources
     def _from_torchaudio(self, root: str, url: str, target: int) -> np.ndarray:
@@ -76,6 +89,61 @@ class RealSpeechSource:
         if not audio_dir.exists():
             audio_dir = Path(root)  # fall back to scanning the whole root for *.flac
         return self._from_local_dir(str(audio_dir), target)
+
+    def _from_aligned(self, source, local_dir, root, url, target, min_silence_ms,
+                      device) -> np.ndarray:
+        """Build buffer + parallel speech_mask by force-aligning LibriSpeech utterances
+        (with their .trans.txt transcripts). Aligns only enough utterances to fill `target`."""
+        from clearvad.distill.forced_align import ForcedAligner
+        from clearvad.utils.audio import load_audio
+
+        if source == "torchaudio":
+            import torchaudio
+            Path(root).mkdir(parents=True, exist_ok=True)
+            LOG.info("Downloading torchaudio LibriSpeech [%s] (first run only)...", url)
+            torchaudio.datasets.LIBRISPEECH(root, url=url, download=True)
+            audio_dir = Path(root) / "LibriSpeech" / url
+            if not audio_dir.exists():
+                audio_dir = Path(root)
+        else:
+            audio_dir = Path(local_dir)
+
+        trans_files = sorted(audio_dir.rglob("*.trans.txt"))
+        if not trans_files:
+            raise FileNotFoundError(
+                f"No .trans.txt transcripts under {audio_dir} — aligned labels need the "
+                f"LibriSpeech layout (utt_id<space>TRANSCRIPT + sibling utt_id.flac).")
+        aligner = ForcedAligner(device=device)
+        a_chunks, m_chunks, total, n_ok = [], [], 0, 0
+        for trans in trans_files:
+            for line in trans.read_text(encoding="utf-8").splitlines():
+                uid, _, text = line.partition(" ")
+                flac = trans.parent / f"{uid}.flac"
+                if not flac.exists() or not text.strip():
+                    continue
+                try:
+                    wav = load_audio(flac, self.sr)
+                    mask = aligner.speech_mask(wav, text, min_silence_ms=min_silence_ms, sr=self.sr)
+                except Exception as exc:  # noqa: BLE001
+                    LOG.warning("align skip %s: %r", flac.name, exc)
+                    continue
+                if mask is None:
+                    continue
+                a_chunks.append(wav.astype(np.float32))
+                m_chunks.append(mask.astype(np.float32))
+                total += len(wav)
+                n_ok += 1
+                if total >= target:
+                    break
+            if total >= target:
+                break
+        if not a_chunks:
+            raise RuntimeError(f"Aligned buffer empty (no utterances aligned under {audio_dir}).")
+        buf = np.concatenate(a_chunks)[:target]
+        self.speech_mask = np.concatenate(m_chunks)[:target]
+        LOG.info("Aligned %d utterances (min_silence=%.0fms) -> frame-accurate labels", n_ok,
+                 min_silence_ms)
+        return buf
 
     def _from_local_dir(self, local_dir: str, target: int) -> np.ndarray:
         from clearvad.utils.audio import load_audio
