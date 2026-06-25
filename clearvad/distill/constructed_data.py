@@ -28,7 +28,8 @@ def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
                    noise_prob: float = 0.6, snr_range=(0.0, 20.0),
                    normalize_dbfs: float = -23.0, noise_source=None,
                    bg_prob: float = 0.6, bg_level=(0.03, 0.4),
-                   speech_mask=None, augment: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+                   speech_mask=None, augment: bool = False, rir_source=None
+                   ) -> Tuple[np.ndarray, np.ndarray]:
     """Build one clip = alternating speech / non-speech -> (audio[L], labels[K] bool).
 
     noise_source (optional, with .sample(n, rng)) supplies REAL noise (e.g. MUSAN); else
@@ -80,7 +81,7 @@ def construct_clip(buffer: np.ndarray, n_samples: int, rng: np.random.Generator,
         audio = rms_normalize(audio, normalize_dbfs)
     if augment:                                   # reverb / codec / gain (labels unchanged)
         from clearvad.distill.augment import augment_clip
-        audio = augment_clip(audio, rng)
+        audio = augment_clip(audio, rng, rir_source=rir_source)
     K = n_samples // CHUNK_SAMPLES
     labels = np.zeros(K, dtype=np.float32)
     for k in range(K):
@@ -93,11 +94,13 @@ class ConstructedDataPool:
 
     def __init__(self, real_source, generator, pool_size: int, clip_chunks: int,
                  teacher=None, true_weight: float = 1.0, label_smooth: float = 0.03,
-                 label_batch: int = 256, noise_source=None, augment: bool = False) -> None:
+                 label_batch: int = 256, noise_source=None, augment: bool = False,
+                 rir_source=None) -> None:
         self.real = real_source
         self.gen = generator
         self.noise_source = noise_source        # optional REAL noise (MUSAN) for hard data
         self.augment = augment                  # reverb/codec/gain augmentation on train clips
+        self.rir_source = rir_source            # optional real RIRs for reverb augmentation
         self.speech_mask = getattr(real_source, "speech_mask", None)  # frame-accurate labels (Flag-1 fix)
         self.teacher = teacher                  # optional auxiliary soft-label teacher
         self.pool_size = pool_size
@@ -115,13 +118,15 @@ class ConstructedDataPool:
         rng = np.random.default_rng(seed)
         audio = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng, self.gen,
                                           noise_source=self.noise_source,
-                                          speech_mask=self.speech_mask, augment=self.augment)[0]
+                                          speech_mask=self.speech_mask, augment=self.augment,
+                                          rir_source=self.rir_source)[0]
                           for _ in range(self.pool_size)])
         # recompute labels deterministically alongside audio (same rng stream order)
         rng2 = np.random.default_rng(seed)
         labels = np.stack([construct_clip(self.real.buffer, self.clip_samples, rng2, self.gen,
                                           noise_source=self.noise_source,
-                                          speech_mask=self.speech_mask, augment=self.augment)[1]
+                                          speech_mask=self.speech_mask, augment=self.augment,
+                                          rir_source=self.rir_source)[1]
                            for _ in range(self.pool_size)])
         audio_t = torch.from_numpy(audio)
         true = torch.from_numpy(labels)

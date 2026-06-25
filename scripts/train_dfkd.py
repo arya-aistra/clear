@@ -94,6 +94,9 @@ def main() -> None:
     ap.add_argument("--noise-buffer-seconds", type=float, default=1800.0)
     ap.add_argument("--augment", action="store_true",
                     help="dataset-free augmentation (synthetic reverb / codec / gain) on train clips")
+    ap.add_argument("--rir", action="store_true",
+                    help="use REAL room impulse responses (OpenSLR SLR28) for reverb (implies --augment)")
+    ap.add_argument("--rir-dir", default=None, help="local RIR wav dir (else download SLR28)")
     args = ap.parse_args()
 
     set_global_seed(1234)
@@ -178,17 +181,24 @@ def main() -> None:
             else:
                 noise_source = RealNoiseSource(source="openslr",
                                                buffer_seconds=args.noise_buffer_seconds)
+        rir_source = None
+        if args.rir or args.rir_dir:
+            from clearvad.distill.rir import RIRSource
+            rir_source = RIRSource(source="local" if args.rir_dir else "openslr",
+                                   local_dir=args.rir_dir)
         from clearvad.distill.constructed_data import ConstructedDataPool
-        LOG.info("DATA=constructed (true_weight=%.2f, aux_teacher=%s, label_smooth=%.3f, noise=%s)",
-                 args.true_weight, args.aux_teacher, args.label_smooth,
-                 args.noise_dir or args.noise_source)
+        LOG.info("DATA=constructed (true_weight=%.2f, aux_teacher=%s, label_smooth=%.3f, noise=%s, "
+                 "augment=%s, rir=%s)", args.true_weight, args.aux_teacher, args.label_smooth,
+                 args.noise_dir or args.noise_source, args.augment or bool(rir_source),
+                 bool(rir_source))
 
         def make_pool(cfg):
             return ConstructedDataPool(
                 real_source, gen, pool_size=int(cfg.get("pool_size", 2048)),
                 clip_chunks=int(cfg.get("chunks_per_sample", 64)), teacher=aux,
                 true_weight=args.true_weight, label_smooth=args.label_smooth,
-                noise_source=noise_source, augment=args.augment)
+                noise_source=noise_source, augment=args.augment or bool(rir_source),
+                rir_source=rir_source)
 
     s1_cfg = _apply_overrides(load_yaml(args.stage1), args.stage1_steps)
     summary["stage1"] = trainer.run_stage(s1_cfg, stage_name="stage1", pool=make_pool(s1_cfg))

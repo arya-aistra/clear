@@ -34,8 +34,10 @@ def synthetic_rir(rng: np.random.Generator, rt60_s: float, sr: int = SAMPLE_RATE
 
 
 def apply_reverb(audio: np.ndarray, rng: np.random.Generator, rt60_range=(0.1, 0.6),
-                 sr: int = SAMPLE_RATE) -> np.ndarray:
-    rir = synthetic_rir(rng, float(rng.uniform(*rt60_range)), sr)
+                 sr: int = SAMPLE_RATE, rir_source=None) -> np.ndarray:
+    """Convolve with a real RIR (rir_source.sample) if given, else a synthetic one."""
+    rir = rir_source.sample(rng) if rir_source is not None else \
+        synthetic_rir(rng, float(rng.uniform(*rt60_range)), sr)
     return _fftconvolve_same(audio, rir)
 
 
@@ -52,11 +54,13 @@ def apply_mulaw(audio: np.ndarray, mu: float = 255.0) -> np.ndarray:
 
 
 def augment_clip(audio: np.ndarray, rng: np.random.Generator, p_reverb: float = 0.5,
-                 p_codec: float = 0.3, p_gain: float = 0.5, sr: int = SAMPLE_RATE) -> np.ndarray:
-    """Randomly apply reverb / codec / gain to a clip. Labels are unaffected (time-aligned ops)."""
+                 p_codec: float = 0.3, p_gain: float = 0.5, sr: int = SAMPLE_RATE,
+                 rir_source=None) -> np.ndarray:
+    """Randomly apply reverb / codec / gain to a clip. Labels are unaffected (time-aligned ops).
+    Uses real RIRs from rir_source when provided, else synthetic reverb."""
     out = audio
     if rng.random() < p_reverb:
-        out = apply_reverb(out, rng, sr=sr)
+        out = apply_reverb(out, rng, sr=sr, rir_source=rir_source)
     if rng.random() < p_codec:
         out = apply_mulaw(out)
     if rng.random() < p_gain:
