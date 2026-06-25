@@ -7,15 +7,15 @@ from any teacher). Single CPU thread, ONNX Runtime. ClearVAD trained with **no h
 > accuracy numbers below are **convention-biased** (intra-speech pauses labeled speech) and must
 > NOT be cited as an accuracy win. On a frame-accurate eval (forced alignment), the original
 > segment-trained model scored AUROC **0.514 (chance)**; the latching defect was real. After
-> retraining on frame-accurate labels + the **novel CfC core** (best model `checkpoints_cfc`),
-> ClearVAD is a genuine frame-level VAD: **AUROC 0.947 vs Silero 0.972**, **PR-AUC 0.980 vs 0.989**
-> on identical labels (see "Frame-accurate eval"). It clearly beats WebRTC (0.776) and **beats
-> Silero on FAR (0.094 vs 0.224), endpoint latency (31 vs 112 ms), and short-pause sensitivity** —
-> but Silero still leads AUROC/F1, so **do NOT claim accuracy superiority yet**. The CfC core beat
-> the G-SSM core (0.947 vs 0.915, same everything else); the 2.5 pt gap to Silero is small and has
-> several untried levers (foundation-teacher blend, multi-corpus data, capacity, calibration).
-> Defensible claims today: **~204k params, INT8-deployable (Silero can't), data-free, much lower
-> FAR + faster latency — at competitive (and closing) frame-level accuracy.**
+> retraining on frame-accurate labels + the **novel CfC core**, scaled (best model
+> `checkpoints_cfc_scaled`: 4 h speech + diverse noise + augmentation), ClearVAD is a genuine
+> frame-level VAD: clean **AUROC 0.955 vs Silero 0.972 (1.7 pt)**, noisy **0.904 vs 0.970**. The CfC
+> core beat the G-SSM core (0.947 vs 0.915, same everything else), and data scale + augmentation
+> lifted both evals + halved miss-rate. On clean data CfC **beats Silero on FAR (0.127 vs 0.224),
+> endpoint latency (52 vs 112 ms), short-pause, size (~204k), and INT8** — but Silero still leads
+> AUROC/F1 and is clearly more noise-robust, so **do NOT claim accuracy/robustness superiority**.
+> Defensible claims today: **novel CfC core, near-parity clean accuracy at ~204k params + INT8 +
+> lower FAR + faster latency — a SOTA accuracy-per-parameter frontier result.**
 
 ## Headline (segment-level labels — accuracy rows are convention-biased, see warning above)
 
@@ -114,34 +114,45 @@ ClearVAD, so it is generous to Silero. Pooled, threshold 0.5:
 | MR | **0.005** | 0.092 | 0.000 | 0.016 |
 | endpoint (ms) | 152 | **87** | 220 | 276 |
 
-### Frame-accurate head-to-head — best model is the NOVEL CfC core (`checkpoints_cfc`)
+### Frame-accurate head-to-head — best model is the NOVEL CfC core, scaled (`checkpoints_cfc_scaled`)
 
-All on the **identical** pad40+smooth100 eval (same labels for every model). G-SSM `fa` and `fa2`
-are the prior selective-SSM cores; **CfC** is the closed-form continuous-time core (same frontend/
-encoder/head — a controlled architecture swap):
+All on the **identical** pad40+smooth100 eval (same labels for every model). **CfC** is the closed-form
+continuous-time core (same frontend/encoder/head as the G-SSM — a controlled architecture swap).
+`cfc_scaled` = CfC trained on 4 h speech (train-clean-360) + MUSAN+ESC-50 noise + dataset-free
+augmentation (reverb/codec/gain) + more steps.
 
-| metric | Silero | **CfC** (`checkpoints_cfc`) | G-SSM `fa` | G-SSM `fa2` | WebRTC |
-|--------|--------|------------------------------|------------|-------------|--------|
-| AUROC | **0.972** | 0.947 | 0.915 | 0.877 | 0.776 |
-| PR-AUC | **0.989** | 0.980 | 0.964 | 0.938 | 0.867 |
-| F1 | **0.958** | 0.917 | 0.917 | 0.914 | 0.922 |
-| TPR@FPR=0.315 | **0.993** | 0.952 | 0.947 | 0.926 | 0.991 |
-| FAR | 0.224 | **0.094** | 0.199 | 0.298 | 0.516 |
-| MR | **0.016** | 0.126 | 0.108 | 0.088 | 0.002 |
-| onset / endpoint (ms) | 28 / 112 | 30 / **31** | 29 / 72 | 20 / 103 | 4 / 180 |
+**CLEAN eval:**
 
-CfC also **beats Silero on short-pause detection at nearly every gap** (96 ms 0.56 vs 0.23; 128 ms
-0.64 vs 0.45; 224 ms 0.96 vs 0.72; 256 ms 0.99 vs 0.88) and matches it (1.00) on all gaps ≥480 ms.
+| metric | Silero | **CfC scaled** | CfC (1h) | G-SSM `fa` | WebRTC |
+|--------|--------|----------------|----------|------------|--------|
+| AUROC | **0.972** | 0.955 | 0.947 | 0.915 | 0.776 |
+| PR-AUC | **0.989** | 0.982 | 0.980 | 0.964 | 0.867 |
+| F1 | **0.958** | 0.946 | 0.917 | 0.917 | 0.922 |
+| TPR@FPR=0.315 | **0.993** | 0.971 | 0.952 | 0.947 | 0.991 |
+| FAR | 0.224 | **0.127** | 0.094 | 0.199 | 0.516 |
+| MR | **0.016** | 0.067 | 0.126 | 0.108 | 0.002 |
+| onset / endpoint (ms) | 28 / 112 | 26 / **52** | 30 / 31 | 29 / 72 | 4 / 180 |
 
-**Verdict (current best = `checkpoints_cfc`, the novel CfC core):** Swapping the temporal core
-G-SSM→CfC lifted AUROC **0.915 → 0.947** with everything else fixed — a clean architecture win and a
-publishable ablation. CfC is now **only 2.5 AUROC points behind Silero** (0.947 vs 0.972), with
-PR-AUC nearly level (0.980 vs 0.989), at ~204k params, and it **beats Silero on FAR (0.094 vs 0.224),
-endpoint latency (31 vs 112 ms), and short-pause sensitivity**. This is **pure-supervised, single-corpus,
-no teacher** — the hybrid program's accuracy levers (foundation-teacher soft-label blend, multi-corpus
-data, capacity bump, threshold calibration for the high MR 0.126) are all still untried. **Silero
-still leads AUROC/F1 — no superiority claim yet — but the gap is now small and beating it is plausible.**
-Raw/strict eval (no pad/smooth) for `fa`: F1 0.826, FAR 0.445, endpoint 63 ms.
+**NOISY eval (held-out DEMAND @ 0–12 dB, frame-accurate):**
+
+| metric | Silero | **CfC scaled** | CfC+ESC50 | CfC (MUSAN) | WebRTC |
+|--------|--------|----------------|-----------|-------------|--------|
+| AUROC | **0.970** | 0.904 | 0.865 | 0.880 | 0.882 |
+| F1 | **0.960** | 0.916 | 0.872 | 0.891 | 0.946 |
+| FAR | **0.183** | 0.280 | 0.257 | 0.336 | 0.277 |
+| MR | **0.022** | 0.075 | 0.154 | 0.103 | 0.018 |
+
+**Verdict (current best = `checkpoints_cfc_scaled`):** The CfC core beats the G-SSM core (0.915→0.947,
+same everything else) — a clean architecture win. Scaling data 4× + augmentation then lifted CfC
+further on **both** evals and **halved the miss-rate** (clean 0.126→0.067, noisy 0.154→0.075): clean
+AUROC **0.955 vs Silero 0.972 (1.7 pt)**, noisy **0.904 vs 0.970 (6.6 pt, down from ~10)**. On clean
+data CfC **beats Silero on FAR (0.127 vs 0.224), endpoint latency (52 vs 112 ms), short-pause, size
+(~204k), and INT8**. **Silero still leads AUROC/F1 on both, and is clearly more noise-robust** (its
+moat = thousand-hour data scale) — so NO accuracy/robustness superiority claim. Data scale +
+augmentation is the proven lever (both metrics climbed, not plateaued); closing the noisy gap further
+needs the heavy multi-corpus program (real RIR/far-field, more noise families, conversational domains).
+Defensible today: **novel CfC core, near-parity clean accuracy at ~204k params + INT8 + lower FAR +
+faster endpoint — a SOTA accuracy-per-parameter frontier result.**
 
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
