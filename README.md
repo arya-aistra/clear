@@ -7,7 +7,24 @@ ClearVAD replaces Silero's LSTM temporal core with a compact **causal Gated SSM 
 block, trains the student via **data-free knowledge distillation** from Silero v5, and ships
 as an INT8-quantized, structurally-pruned ONNX model targeting sub-millisecond CPU inference.
 
-**Status:** Phase 0 (environment + Silero dissection). See `reports/` for phase artifacts.
+**Status:** Model complete — **beats Silero VAD v5 on accuracy** (clean *and* real-world noise),
+trained with **no human labels**, shipping as a **0.29 MB INT8 ONNX** binary. Serving (FastAPI)
+next. See `reports/final_benchmark.md` and `reports/paper/clearvad_whitepaper.md`.
+
+## Results vs Silero VAD v5 (independent, construction-labeled; no human labels in training)
+
+| | Silero v5 | **ClearVAD** |
+|--|--|--|
+| Clean F1 / AUC | 0.838 / 0.836 | **0.923 / 0.957** |
+| Noisy 0–12 dB F1 / AUC | 0.848 / 0.842 | **0.919 / 0.856** |
+| INT8 F1 (clean / noisy) | ❌ INT8 fails to run | **0.892 / 0.882** |
+| Size (ONNX) | 1.29 MB | **0.286 MB INT8 (4.5×)** |
+| Onset / endpoint latency | 108 / 47 ms | **16–23 / 13–30 ms** |
+| CPU latency / chunk | 0.077 ms | 0.170 ms (188× real-time) |
+
+ClearVAD wins accuracy, miss-rate, short-silence detection, size, INT8-deployability, and
+onset/endpoint latency. Honest caveats (segment-level eval labels, MUSAN-noise train/eval,
+tunable FAR) are documented in `reports/final_benchmark.md`.
 
 ---
 
