@@ -74,9 +74,11 @@ def main() -> None:
                     help="constructed mode: weight on TRUE labels (1.0=pure supervised; <1 blends aux teacher)")
     ap.add_argument("--label-smooth", type=float, default=0.03, help="label smoothing on true labels")
     # REAL-WORLD ROBUSTNESS: real noise (MUSAN) mixed into constructed clips (speech-in-noise)
-    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local"],
-                    help="real noise for constructed data: MUSAN (OpenSLR) or a local dir")
+    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local", "hf"],
+                    help="real noise for constructed data: MUSAN (OpenSLR), local dir, or HF repo")
     ap.add_argument("--noise-dir", default=None, help="local noise wav/flac dir")
+    ap.add_argument("--noise-hf-repo", default="voice-biomarkers/DEMAND-acoustic-noise",
+                    help="HF noise dataset id when --noise-source hf")
     ap.add_argument("--noise-buffer-seconds", type=float, default=1800.0)
     args = ap.parse_args()
 
@@ -148,6 +150,9 @@ def main() -> None:
             from clearvad.distill.real_noise import RealNoiseSource
             if args.noise_dir:
                 noise_source = RealNoiseSource(source="local", local_dir=args.noise_dir,
+                                               buffer_seconds=args.noise_buffer_seconds)
+            elif args.noise_source == "hf":
+                noise_source = RealNoiseSource(source="hf", hf_repo=args.noise_hf_repo,
                                                buffer_seconds=args.noise_buffer_seconds)
             else:
                 noise_source = RealNoiseSource(source="openslr",

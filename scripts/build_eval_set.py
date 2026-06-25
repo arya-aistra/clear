@@ -46,9 +46,12 @@ def main() -> None:
     ap.add_argument("--local-speech-dir", default=None)
     ap.add_argument("--cache", default="data/eval/controlled_eval.npz")
     ap.add_argument("--out", default="reports/phase8/silero_eval_bar.json")
-    # HARD real-world eval: mix real noise (MUSAN/local) into speech at low SNR
-    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local"])
+    # HARD real-world eval: mix real noise into speech at low SNR. Use a HELD-OUT noise corpus
+    # (different from training) to make the noise-robustness claim airtight (closes Flag 2).
+    ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local", "hf"])
     ap.add_argument("--noise-dir", default=None)
+    ap.add_argument("--noise-hf-repo", default="voice-biomarkers/DEMAND-acoustic-noise",
+                    help="HF noise dataset for held-out eval (e.g. DEMAND, ESC-50)")
     ap.add_argument("--snr-min", type=float, default=5.0)
     ap.add_argument("--snr-max", type=float, default=20.0)
     ap.add_argument("--noise-prob", type=float, default=0.4)
@@ -63,8 +66,14 @@ def main() -> None:
     noise_source = None
     if args.noise_source != "none" or args.noise_dir:
         from clearvad.distill.real_noise import RealNoiseSource
-        noise_source = RealNoiseSource(source="local" if args.noise_dir else "openslr",
-                                       local_dir=args.noise_dir, buffer_seconds=1200.0)
+        if args.noise_dir:
+            src_kind = "local"
+        elif args.noise_source == "hf":
+            src_kind = "hf"
+        else:
+            src_kind = "openslr"
+        noise_source = RealNoiseSource(source=src_kind, local_dir=args.noise_dir,
+                                       hf_repo=args.noise_hf_repo, buffer_seconds=1200.0)
 
     LOG.info("Constructing %d eval sequences (%.0fs each, noise=%s, SNR=%.0f-%.0f)...",
              args.n_sequences, args.seq_seconds, args.noise_dir or args.noise_source,
