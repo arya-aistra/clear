@@ -3,7 +3,17 @@
 All numbers on **independent, construction-labeled eval sets** (labels from construction, not
 from any teacher). Single CPU thread, ONNX Runtime. ClearVAD trained with **no human labels**.
 
-## Headline
+> ⚠️ **ACCURACY CLAIM RETRACTED — READ THIS FIRST.** The accuracy numbers below use
+> **segment-level** labels (intra-speech pauses labeled as speech). A frame-accurate eval
+> (forced alignment, see "Frame-accurate eval" section) shows ClearVAD's AUROC is **0.514
+> (chance)** vs Silero **0.844** on the *same* labels. **ClearVAD's segment-level accuracy
+> "win" was convention-alignment, not real frame-level VAD skill.** Do **not** claim accuracy
+> superiority over Silero. The defensible claims are **size (4.5×), INT8 deployability,
+> data-free training, onset latency** — not accuracy. Root cause: training labels are
+> segment-level (`constructed_data.py`), so the model learned speech-*region* detection, not
+> frame-level VAD. Fixable only by retraining on frame-accurate labels.
+
+## Headline (segment-level labels — accuracy rows are convention-biased, see warning above)
 
 | Dimension | Silero v5 | **ClearVAD** | Winner |
 |-----------|-----------|--------------|--------|
@@ -82,6 +92,37 @@ and FAR 0.706 show it barely discriminates — it scores F1 by calling almost ev
 low MR is just a side effect of rarely going silent). It detects essentially **no** short pauses
 (<0.08 at ≤150 ms). ClearVAD has the best discrimination (AUROC) of the three and resolves the
 short pauses both Silero and WebRTC miss.
+
+## Frame-accurate eval (forced alignment, LibriSpeech test-clean) — Flag 1 CONFIRMED
+Labels from torchaudio MMS_FA forced alignment: real word boundaries, intra-word / inter-utterance
+silence = non-speech. This removes the segment-level convention bias. Pooled, threshold 0.5:
+
+| metric | Silero | ClearVAD | WebRTC |
+|--------|--------|----------|--------|
+| **AUROC** | **0.844** | **0.514** (chance) | 0.670 |
+| F1 | 0.846 | 0.759 | 0.802 |
+| PR-AUC | 0.843 | 0.590 | 0.677 |
+| FAR | 0.514 | **0.876** | 0.704 |
+| MR | 0.005 | 0.016 | 0.000 |
+| endpoint latency (ms) | 152 | **276** | 219 |
+
+Short-silence detection on *real* pauses — ClearVAD fails even multi-second silences:
+
+| gap | Silero | ClearVAD | WebRTC |
+|-----|--------|----------|--------|
+| ~500 ms | ~0.96 | 0.13 | ~0.65 |
+| ~1000 ms | 1.00 | 0.45 | 0.97 |
+| 1696 ms | 1.00 | **0.00** | 1.00 |
+| 1792 ms | 1.00 | **0.00** | 1.00 |
+| 1984 ms | 1.00 | **0.00** | 1.00 |
+
+**Verdict:** On the *same* labels Silero scores AUROC 0.844, so the labels are valid (a real
+frame-level VAD ranks them well). ClearVAD scoring 0.514 = it cannot discriminate speech from
+silence at frame level — it stays latched on "speech" through real multi-second pauses (FAR 0.876,
+endpoint 276 ms, several long gaps detected at 0.0). The segment-level "accuracy win" was the model
+scoring back its own training convention. **Flag 1 is confirmed, not closed. Do not publish an
+accuracy-superiority claim.** Fix path: retrain on forced-alignment frame-accurate labels (the SSM
+architecture is not the problem — the segment-level training labels are), then re-run this eval.
 
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
