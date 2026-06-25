@@ -52,20 +52,36 @@ Short-silence detection (noisy eval, fraction of *true* inserted gaps detected):
 ## Held-out noise (test-clean + **DEMAND** @ 0–12 dB) — noise NOT seen in training (MUSAN)
 Standard VAD metrics (pooled), comparable to published numbers:
 
-| metric | Silero | ClearVAD | WebRTC |
-|--------|--------|----------|--------|
-| F1 | 0.850 | **0.930** | (pip webrtcvad) |
-| AUROC | 0.859 | **0.878** | — |
-| TPR@FPR=0.315 | 0.809 | **0.920** | — |
-| PR-AUC | **0.972** | 0.967 | — |
-| FAR | **0.216** | 0.340 | — |
-| MR | 0.232 | **0.079** | — |
-| onset / endpoint (ms) | 114 / 40 | **21 / 34** | — |
+| metric | Silero | ClearVAD | WebRTC (aggr.3) |
+|--------|--------|----------|-----------------|
+| F1 | 0.850 | **0.930** | 0.902 |
+| AUROC | 0.859 | **0.878** | 0.642 |
+| TPR@FPR=0.315 | 0.809 | **0.920** | 0.909 |
+| PR-AUC | **0.972** | 0.967 | 0.885 |
+| FAR | **0.216** | 0.340 | 0.706 |
+| MR | 0.232 | 0.079 | **0.074** |
+| onset / endpoint (ms) | 114 / 40 | 21 / 34 | **15** / 105 |
+
+Short-silence detection on held-out DEMAND (fraction of *true* gaps detected):
+
+| gap | Silero | ClearVAD | WebRTC |
+|-----|--------|----------|--------|
+| 50 ms | 0.52 | **0.76** | 0.04 |
+| 100 ms | 0.66 | **0.86** | 0.03 |
+| 150 ms | 0.67 | **0.72** | 0.08 |
+| 200 ms | 0.74 | 0.69 | 0.48 |
+| 300 ms | **0.99** | 0.88 | 0.56 |
+| 500 ms | **1.00** | 0.92 | 0.56 |
 
 **Flag 2 (noise generalization) closed:** ClearVAD trained on MUSAN beats Silero on *unseen*
 DEMAND noise on F1, AUROC, TPR@FPR, MR, latency. FAR is higher at the default threshold but
 AUROC dominates → a calibrated threshold trades ClearVAD's large MR headroom for lower FAR.
-(`pip install webrtcvad` + `--webrtc` adds the WebRTC baseline column.)
+
+**WebRTC (aggressiveness 3) is the energy-VAD floor:** 0.90 F1 looks competitive, but AUROC 0.642
+and FAR 0.706 show it barely discriminates — it scores F1 by calling almost everything speech (its
+low MR is just a side effect of rarely going silent). It detects essentially **no** short pauses
+(<0.08 at ≤150 ms). ClearVAD has the best discrimination (AUROC) of the three and resolves the
+short pauses both Silero and WebRTC miss.
 
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
