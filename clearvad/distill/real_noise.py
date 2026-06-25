@@ -38,48 +38,60 @@ class RealNoiseSource:
         self.sr = sample_rate
         target = int(buffer_seconds * self.sr)
         if local_dir:
-            audio_root = Path(local_dir)
+            self.buffer = self._load_buffer(Path(local_dir), subsets, target, max_files, seed)
         elif source == "openslr":
-            audio_root = self._ensure_musan(root, subsets)
+            self.buffer = self._load_buffer(self._ensure_musan(root, subsets), subsets,
+                                            target, max_files, seed)
         elif source == "hf":
-            audio_root = self._ensure_hf(hf_repo, root)
+            self.buffer = self._buffer_from_hf(hf_repo, target)
         else:
             raise ValueError(f"unknown noise source {source!r}")
-        self.buffer = self._load_buffer(audio_root, subsets, target, max_files, seed)
         LOG.info("Real-noise buffer: %.1f s (%d samples) from %s",
                  len(self.buffer) / self.sr, len(self.buffer), local_dir or hf_repo or source)
 
-    def _ensure_hf(self, hf_repo: Optional[str], root: str) -> Path:
-        """Download a noise dataset (DEMAND, ESC-50, ...) from the HF hub → local wav dir.
-
-        Handles both loose wav/flac repos and archive-based ones (DEMAND ships per-environment
-        .zip files); extracts any archives, then the buffer loader globs the wavs recursively.
-        """
+    def _buffer_from_hf(self, hf_repo: Optional[str], target: int) -> np.ndarray:
+        """Stream a Parquet-format HF noise dataset (e.g. DEMAND) and decode audio via soundfile
+        (datasets' Audio(decode=False) → raw bytes → soundfile; avoids torchcodec)."""
         if not hf_repo:
             raise ValueError("source='hf' requires hf_repo (e.g. 'voice-biomarkers/DEMAND-acoustic-noise')")
-        import tarfile
-        import zipfile
-        from huggingface_hub import snapshot_download
-        LOG.info("Downloading HF noise dataset %s ...", hf_repo)
-        path = Path(snapshot_download(
-            repo_id=hf_repo, repo_type="dataset",
-            local_dir=str(Path(root) / hf_repo.replace("/", "__")),
-            allow_patterns=["*.wav", "*.flac", "*.WAV", "*.FLAC",
-                            "*.zip", "*.tar", "*.tar.gz", "*.tgz"]))
-        for arc in list(path.rglob("*.zip")):
-            try:
-                with zipfile.ZipFile(arc) as z:
-                    z.extractall(arc.parent)
-            except Exception as exc:  # noqa: BLE001
-                LOG.warning("zip extract failed %s: %r", arc.name, exc)
-        for arc in (list(path.rglob("*.tar.gz")) + list(path.rglob("*.tgz"))
-                    + list(path.rglob("*.tar"))):
-            try:
-                with tarfile.open(arc) as t:
-                    t.extractall(arc.parent)
-            except Exception as exc:  # noqa: BLE001
-                LOG.warning("tar extract failed %s: %r", arc.name, exc)
-        return path
+        import io
+        import soundfile as sf
+        from datasets import Audio, load_dataset
+        from clearvad.utils.audio import to_mono
+
+        LOG.info("Streaming HF noise dataset %s (parquet) ...", hf_repo)
+        ds = load_dataset(hf_repo, split="train", streaming=True)
+        audio_col = None
+        for name, feat in (getattr(ds, "features", None) or {}).items():
+            if feat.__class__.__name__ == "Audio":
+                audio_col = name
+                break
+        audio_col = audio_col or "audio"
+        try:
+            ds = ds.cast_column(audio_col, Audio(decode=False))   # get raw bytes, decode ourselves
+        except Exception:  # noqa: BLE001
+            pass
+        chunks, total = [], 0
+        for ex in ds:
+            a = ex.get(audio_col)
+            if not isinstance(a, dict):
+                continue
+            if a.get("bytes") is not None:
+                arr, sr = sf.read(io.BytesIO(a["bytes"]), dtype="float32", always_2d=False)
+            elif a.get("array") is not None:
+                arr, sr = np.asarray(a["array"], dtype=np.float32), int(a.get("sampling_rate", self.sr))
+            else:
+                continue
+            arr = to_mono(arr)
+            if sr != self.sr:
+                arr = resample(arr, sr, self.sr)
+            chunks.append(arr.astype(np.float32))
+            total += len(arr)
+            if total >= target:
+                break
+        if not chunks:
+            raise RuntimeError(f"HF noise dataset {hf_repo} yielded no audio (column={audio_col}).")
+        return np.concatenate(chunks)[:target]
 
     # ------------------------------------------------------------ acquisition
     def _ensure_musan(self, root: str, subsets) -> Path:
