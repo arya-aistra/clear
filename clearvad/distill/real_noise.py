@@ -151,3 +151,46 @@ class RealNoiseSource:
             return buf[s:s + n_samples].copy()
         reps = int(np.ceil(n_samples / max(L, 1)))
         return np.tile(buf, reps)[:n_samples].copy()
+
+
+# Token registry for --noise-sources (train on diverse noise; hold one corpus out for eval).
+_NOISE_PRESETS = {
+    "musan": dict(source="openslr"),
+    "esc50": dict(source="hf", hf_repo="ashraq/esc50"),
+    "demand": dict(source="hf", hf_repo="voice-biomarkers/DEMAND-acoustic-noise"),
+}
+
+
+def _build_one(token: str, buffer_seconds: float) -> "RealNoiseSource":
+    """Parse a noise token: a preset name, 'hf:<repo>', or 'local:<dir>'."""
+    if token in _NOISE_PRESETS:
+        return RealNoiseSource(buffer_seconds=buffer_seconds, **_NOISE_PRESETS[token])
+    if token.startswith("hf:"):
+        return RealNoiseSource(source="hf", hf_repo=token[3:], buffer_seconds=buffer_seconds)
+    if token.startswith("local:"):
+        return RealNoiseSource(source="local", local_dir=token[6:], buffer_seconds=buffer_seconds)
+    raise ValueError(f"unknown noise token {token!r} (presets: {list(_NOISE_PRESETS)} | hf:<repo> | local:<dir>)")
+
+
+class MultiNoiseSource:
+    """Combine several noise corpora; each .sample() draws from a randomly chosen corpus.
+
+    Training on diverse noise families (and HOLDING ONE OUT for eval) is the lever for real
+    noise-robustness — the single-corpus (MUSAN-only) model failed to reject unseen DEMAND noise.
+    Robust to a corpus failing to load (warns + skips, as long as >=1 loads)."""
+
+    def __init__(self, tokens, buffer_seconds: float = 1800.0) -> None:
+        self.sources = []
+        for tok in tokens:
+            try:
+                self.sources.append(_build_one(tok, buffer_seconds))
+                LOG.info("Noise corpus loaded: %s", tok)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("Noise corpus %s failed to load (skipping): %r", tok, exc)
+        if not self.sources:
+            raise RuntimeError(f"No noise corpora loaded from {tokens}")
+        LOG.info("MultiNoiseSource: %d corpora (%s)", len(self.sources), ", ".join(tokens))
+
+    def sample(self, n_samples: int, rng: np.random.Generator) -> np.ndarray:
+        src = self.sources[int(rng.integers(len(self.sources)))]
+        return src.sample(n_samples, rng)

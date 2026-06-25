@@ -84,6 +84,10 @@ def main() -> None:
     # REAL-WORLD ROBUSTNESS: real noise (MUSAN) mixed into constructed clips (speech-in-noise)
     ap.add_argument("--noise-source", default="none", choices=["none", "musan", "local", "hf"],
                     help="real noise for constructed data: MUSAN (OpenSLR), local dir, or HF repo")
+    ap.add_argument("--noise-sources", nargs="+", default=None,
+                    help="DIVERSE noise: multiple corpora to mix, e.g. 'musan esc50 hf:<repo>'. "
+                         "Hold one corpus (e.g. demand) OUT for eval to test noise generalization. "
+                         "Overrides --noise-source when set.")
     ap.add_argument("--noise-dir", default=None, help="local noise wav/flac dir")
     ap.add_argument("--noise-hf-repo", default="voice-biomarkers/DEMAND-acoustic-noise",
                     help="HF noise dataset id when --noise-source hf")
@@ -157,7 +161,11 @@ def main() -> None:
             from clearvad.distill.firered_teacher import FireRedVADTeacher
             aux = FireRedVADTeacher()
         noise_source = None
-        if args.noise_source != "none" or args.noise_dir:
+        if args.noise_sources:                          # DIVERSE multi-corpus noise (the robustness fix)
+            from clearvad.distill.real_noise import MultiNoiseSource
+            noise_source = MultiNoiseSource(args.noise_sources,
+                                            buffer_seconds=args.noise_buffer_seconds)
+        elif args.noise_source != "none" or args.noise_dir:
             from clearvad.distill.real_noise import RealNoiseSource
             if args.noise_dir:
                 noise_source = RealNoiseSource(source="local", local_dir=args.noise_dir,
