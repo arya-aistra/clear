@@ -62,6 +62,8 @@ def main() -> None:
                     help="force-align training speech for frame-accurate labels (constructed mode)")
     ap.add_argument("--align-min-silence-ms", type=float, default=100.0,
                     help="fill interior silence gaps shorter than this (co-articulation, not pauses)")
+    ap.add_argument("--align-pad-ms", type=float, default=40.0,
+                    help="extend each aligned word span by this each side (MMS_FA trims speech edges)")
     ap.add_argument("--real-fraction", type=float, default=None, help="override real_fraction")
     ap.add_argument("--pos-weight", type=float, default=None, help="override speech-class pos_weight (both stages)")
     ap.add_argument("--no-amp", action="store_true")
@@ -119,7 +121,7 @@ def main() -> None:
             hf_dataset=args.hf_dataset, hf_config=args.hf_config, hf_split=args.hf_split,
             buffer_seconds=args.buffer_seconds,
             aligned=args.aligned_labels, align_min_silence_ms=args.align_min_silence_ms,
-            align_device=args.device)
+            align_pad_ms=args.align_pad_ms, align_device=args.device)
 
     trainer = DFKDTrainer(model, teacher, gen, device=args.device, out_dir=args.out_dir,
                           real_source=real_source, use_amp=not args.no_amp)

@@ -49,6 +49,7 @@ class RealSpeechSource:
         # so intra-speech pauses are labeled silence (the Flag-1 fix). LibriSpeech layout only.
         aligned: bool = False,
         align_min_silence_ms: float = 100.0,
+        align_pad_ms: float = 40.0,
         align_device: str = "cuda",
     ) -> None:
         self.sr = sample_rate
@@ -61,7 +62,7 @@ class RealSpeechSource:
             if source not in ("torchaudio", "local"):
                 raise ValueError("aligned=True needs a LibriSpeech layout (source torchaudio/local)")
             self.buffer = self._from_aligned(source, local_dir, ls_root, ls_url, target,
-                                             align_min_silence_ms, align_device)
+                                             align_min_silence_ms, align_pad_ms, align_device)
         elif source == "local":
             self.buffer = self._from_local_dir(local_dir, target)
         elif source == "torchaudio":
@@ -91,7 +92,7 @@ class RealSpeechSource:
         return self._from_local_dir(str(audio_dir), target)
 
     def _from_aligned(self, source, local_dir, root, url, target, min_silence_ms,
-                      device) -> np.ndarray:
+                      pad_ms, device) -> np.ndarray:
         """Build buffer + parallel speech_mask by force-aligning LibriSpeech utterances
         (with their .trans.txt transcripts). Aligns only enough utterances to fill `target`."""
         from clearvad.distill.forced_align import ForcedAligner
@@ -123,7 +124,8 @@ class RealSpeechSource:
                     continue
                 try:
                     wav = load_audio(flac, self.sr)
-                    mask = aligner.speech_mask(wav, text, min_silence_ms=min_silence_ms, sr=self.sr)
+                    mask = aligner.speech_mask(wav, text, min_silence_ms=min_silence_ms,
+                                               pad_ms=pad_ms, sr=self.sr)
                 except Exception as exc:  # noqa: BLE001
                     LOG.warning("align skip %s: %r", flac.name, exc)
                     continue
@@ -141,8 +143,8 @@ class RealSpeechSource:
             raise RuntimeError(f"Aligned buffer empty (no utterances aligned under {audio_dir}).")
         buf = np.concatenate(a_chunks)[:target]
         self.speech_mask = np.concatenate(m_chunks)[:target]
-        LOG.info("Aligned %d utterances (min_silence=%.0fms) -> frame-accurate labels", n_ok,
-                 min_silence_ms)
+        LOG.info("Aligned %d utterances (min_silence=%.0fms, pad=%.0fms) -> frame-accurate labels",
+                 n_ok, min_silence_ms, pad_ms)
         return buf
 
     def _from_local_dir(self, local_dir: str, target: int) -> np.ndarray:

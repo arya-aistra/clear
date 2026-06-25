@@ -56,6 +56,9 @@ def main() -> None:
     ap.add_argument("--min-silence-ms", type=float, default=0.0,
                     help="fill interior gaps shorter than this (0 = strict/raw eval). "
                          "Match the training value for an apples-to-apples comparison.")
+    ap.add_argument("--pad-ms", type=float, default=0.0,
+                    help="extend each word span by this each side (match training for fairness). "
+                         "Corrects MMS_FA trimming speech edges; applied identically to all models.")
     ap.add_argument("--cache", default="data/eval/aligned_eval.npz")
     ap.add_argument("--out", default="reports/phase8/aligned_eval_info.json")
     ap.add_argument("--device", default="cuda")
@@ -68,12 +71,14 @@ def main() -> None:
 
     aligner = ForcedAligner(device=args.device)
     utts = find_utterances(ls_dir, args.max_utts)
-    LOG.info("Aligning %d utterances (min_silence=%.0fms)...", len(utts), args.min_silence_ms)
+    LOG.info("Aligning %d utterances (min_silence=%.0fms, pad=%.0fms)...", len(utts),
+             args.min_silence_ms, args.pad_ms)
 
     def utt_labels(flac: Path, text: str):
         """Return (audio[L], sample_speech_mask[L]) with frame-accurate speech from alignment."""
         wav = load_audio(flac, SAMPLE_RATE)
-        mask = aligner.speech_mask(wav, text, min_silence_ms=args.min_silence_ms, sr=SAMPLE_RATE)
+        mask = aligner.speech_mask(wav, text, min_silence_ms=args.min_silence_ms,
+                                   pad_ms=args.pad_ms, sr=SAMPLE_RATE)
         if mask is None:
             return None
         return wav, mask

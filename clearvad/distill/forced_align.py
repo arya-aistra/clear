@@ -65,8 +65,13 @@ class ForcedAligner:
         self.aligner = bundle.get_aligner()
 
     def speech_mask(self, wav: np.ndarray, transcript: str,
-                    min_silence_ms: float = 0.0, sr: int = 16000):
-        """Return a sample-resolution speech mask [len(wav)] (1=speech), or None if untokenizable."""
+                    min_silence_ms: float = 0.0, pad_ms: float = 0.0, sr: int = 16000):
+        """Return a sample-resolution speech mask [len(wav)] (1=speech), or None if untokenizable.
+
+        pad_ms: extend each word span by this much on each side. MMS_FA places token boundaries
+        slightly inside the acoustic word, so the raw mask trims real speech at word edges (=> a
+        model trained on it under-detects speech, high miss-rate). ~40 ms recovers the true extent.
+        """
         words = normalize_transcript(transcript)
         if not words:
             return None
@@ -75,12 +80,13 @@ class ForcedAligner:
             emission, _ = self.model(wt)
         token_spans = self.aligner(emission[0], self.tokenizer(words))
         ratio = wav.shape[0] / emission.shape[1]
+        pad = int(pad_ms / 1000 * sr)
         mask = np.zeros(wav.shape[0], dtype=np.float32)
         for spans in token_spans:                       # one entry per word
             if not spans:
                 continue
-            s = int(spans[0].start * ratio)
-            e = int(spans[-1].end * ratio)
+            s = int(spans[0].start * ratio) - pad
+            e = int(spans[-1].end * ratio) + pad
             mask[max(s, 0):min(e, len(mask))] = 1.0
         if min_silence_ms > 0:
             mask = fill_short_silences(mask, int(min_silence_ms / 1000 * sr))
