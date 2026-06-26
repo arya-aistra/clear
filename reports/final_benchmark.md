@@ -165,6 +165,20 @@ clean F1 0.9593 marginally edges Silero's 0.9583 — confirming clean parity.) *
 `checkpoints_cfc_20h`** (noisy FAR 0.205 < divnoise 0.250; clean identical) as the shipping model;
 move to consolidation (INT8 export + verification, paper/model-card, serving).
 
+### Deployment (INT8 ONNX) — locked `checkpoints_cfc_20h` (302,980 params)
+
+| variant | size (MB) | vs Silero 1.29 | F1 (frame-acc clean) | latency ms/chunk | state-carry |
+|---------|-----------|----------------|----------------------|------------------|-------------|
+| FP32 | 1.236 | 1.04× | 0.958 (= Silero) | 0.089 | exact (Δprob 2e-6) |
+| FP16 | 0.646 | 2.0× | — | 0.104 | ✅ |
+| **INT8** | **0.457** | **2.82×** | **0.945** (−1.29 pp) | 0.161 (~200× RT) | ✅ runs (Silero INT8 fails) |
+
+All four export gates PASS: INT8 < 1.5 MB, ≥2× smaller than Silero, F1 degradation < 2 pp, INT8
+runs + carries state. The 2-layer CfC (303k params) trades the old 1-layer model's 4.5× size edge
+for clean-accuracy parity — INT8 is 2.82× smaller and is the **only** one of the two models that
+exists in INT8 at all (Silero's INT8 fails on `ConvInteger`). INT8 recurrence quantization costs
+1.29 pp F1; mixed-precision not needed. Binaries in `dist/` (`clearvad_lite.onnx` = INT8).
+
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
    Part of the raw F1 gap is convention-alignment; the **AUC, miss-rate, and short-silence-on-true-
