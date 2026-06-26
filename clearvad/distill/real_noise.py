@@ -154,10 +154,14 @@ class RealNoiseSource:
 
 
 # Token registry for --noise-sources (train on diverse noise; hold one corpus out for eval).
+# urbansound8k/fsd50k add street/traffic/HVAC/public-space noise that overlaps DEMAND's acoustic
+# environments — the families the musan+esc50 model under-rejected on the held-out noisy eval.
 _NOISE_PRESETS = {
     "musan": dict(source="openslr"),
     "esc50": dict(source="hf", hf_repo="ashraq/esc50"),
     "demand": dict(source="hf", hf_repo="voice-biomarkers/DEMAND-acoustic-noise"),
+    "urbansound8k": dict(source="hf", hf_repo="danavery/urbansound8K"),
+    "fsd50k": dict(source="hf", hf_repo="Fhrozen/FSD50k"),
 }
 
 
