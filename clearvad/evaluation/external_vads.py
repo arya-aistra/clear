@@ -58,14 +58,23 @@ class PyannoteVAD:
         data = np.asarray(out.data, dtype=np.float32)
         if data.ndim == 3:                       # [chunks, frames, classes] -> collapse
             data = data.reshape(-1, data.shape[-1])
-        if data.ndim == 2 and data.shape[1] > 1:
-            # powerset output: softmax to probs if these look like logits, then speech = 1 - P(empty)
-            if data.min() < 0.0 or data.max() > 1.0001:
-                e = np.exp(data - data.max(axis=-1, keepdims=True))
-                data = e / (e.sum(axis=-1, keepdims=True) + 1e-9)
-            speech = 1.0 - data[:, 0]            # class 0 = empty set (no speaker)
-        else:
+        C = data.shape[1] if data.ndim == 2 else 1
+        if C == 1:
             speech = data.reshape(-1)
+        elif C <= 4:
+            # segmentation-3.0 Inference returns per-speaker MULTILABEL activity [T, n_spk];
+            # speech = any speaker active = max over speaker columns (NO softmax — independent).
+            d = data
+            if d.min() < 0.0 or d.max() > 1.0001:
+                d = 1.0 / (1.0 + np.exp(-d))      # sigmoid if logits
+            speech = d.max(axis=1)
+        else:
+            # raw powerset probabilities -> speech = 1 - P(empty set = class 0)
+            d = data
+            if d.min() < 0.0 or d.max() > 1.0001:
+                e = np.exp(d - d.max(axis=-1, keepdims=True))
+                d = e / (e.sum(axis=-1, keepdims=True) + 1e-9)
+            speech = 1.0 - d[:, 0]
         # derive frame hop from COVERAGE (robust; do not trust sliding_window metadata)
         hop = len(audio) / max(len(speech), 1)
         return align_to_chunks(speech, hop, len(audio))
