@@ -55,10 +55,19 @@ class PyannoteVAD:
     def probs(self, audio: np.ndarray) -> np.ndarray:
         wav = self.torch.from_numpy(np.ascontiguousarray(audio, np.float32)).unsqueeze(0)
         out = self.inf({"waveform": wav, "sample_rate": SAMPLE_RATE})  # SlidingWindowFeature
-        data = np.asarray(out.data, dtype=np.float32)                  # [T, n_powerset_classes]
-        # powerset class 0 = the empty set (no speaker) -> speech activity = 1 - P(empty)
-        speech = 1.0 - data[:, 0] if data.ndim == 2 else data.reshape(-1)
-        hop = float(out.sliding_window.step) * SAMPLE_RATE
+        data = np.asarray(out.data, dtype=np.float32)
+        if data.ndim == 3:                       # [chunks, frames, classes] -> collapse
+            data = data.reshape(-1, data.shape[-1])
+        if data.ndim == 2 and data.shape[1] > 1:
+            # powerset output: softmax to probs if these look like logits, then speech = 1 - P(empty)
+            if data.min() < 0.0 or data.max() > 1.0001:
+                e = np.exp(data - data.max(axis=-1, keepdims=True))
+                data = e / (e.sum(axis=-1, keepdims=True) + 1e-9)
+            speech = 1.0 - data[:, 0]            # class 0 = empty set (no speaker)
+        else:
+            speech = data.reshape(-1)
+        # derive frame hop from COVERAGE (robust; do not trust sliding_window metadata)
+        hop = len(audio) / max(len(speech), 1)
         return align_to_chunks(speech, hop, len(audio))
 
 
