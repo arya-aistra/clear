@@ -1,30 +1,37 @@
 # ClearVAD
 
-> A compact, CPU-deployable **SSM-based Voice Activity Detector** distilled from Silero VAD v5.
-> Single ONNX binary, no GPU at inference, pip-installable, FastAPI-servable.
+> A compact, CPU/INT8-deployable Voice Activity Detector with a **novel closed-form
+> continuous-time (CfC) temporal core** — untouched for VAD. Single ONNX binary, no GPU at
+> inference, pip-installable, FastAPI-servable.
 
-ClearVAD replaces Silero's LSTM temporal core with a compact **causal Gated SSM (G-SSM)**
-block, trains the student via **data-free knowledge distillation** from Silero v5, and ships
-as an INT8-quantized, structurally-pruned ONNX model targeting sub-millisecond CPU inference.
+ClearVAD replaces an LSTM/conv temporal core with a tiny **CfC** recurrence (Hasani et al. 2022),
+trains it on **forced-alignment frame-accurate labels** (no human VAD annotations) with real-noise
+and room-impulse-response augmentation, and ships as an **INT8 ONNX** binary for CPU edge serving.
+(An earlier selective-SSM core is retained for ablation; CfC beat it in a controlled swap.)
 
-**Status:** Model complete — **beats Silero VAD v5 on accuracy** (clean *and* real-world noise),
-trained with **no human labels**, shipping as a **0.29 MB INT8 ONNX** binary. Serving (FastAPI)
-next. See `reports/final_benchmark.md` and `reports/paper/clearvad_whitepaper.md`.
+**Status:** Model locked (`checkpoints_cfc_20h`). **Matches Silero VAD v5 on clean frame-accurate
+accuracy** (F1 tied), near-parity under unseen noise, while being **smaller, INT8-deployable where
+Silero's INT8 fails, with lower false-alarm rate and faster endpoint latency**, trained with **no
+human labels**. We do **not** claim accuracy superiority over Silero. Serving (FastAPI) next.
+See `reports/final_benchmark.md`.
 
-## Results vs Silero VAD v5 (independent, construction-labeled; no human labels in training)
+## Results vs Silero VAD v5 — frame-accurate eval (forced alignment, identical labels both models)
 
-| | Silero v5 | **ClearVAD** |
+| | Silero v5 | **ClearVAD (CfC)** |
 |--|--|--|
-| Clean F1 / AUC | 0.838 / 0.836 | **0.923 / 0.957** |
-| Noisy 0–12 dB F1 / AUC | 0.848 / 0.842 | **0.919 / 0.856** |
-| INT8 F1 (clean / noisy) | ❌ INT8 fails to run | **0.892 / 0.882** |
-| Size (ONNX) | 1.29 MB | **0.286 MB INT8 (4.5×)** |
-| Onset / endpoint latency | 108 / 47 ms | **16–23 / 13–30 ms** |
-| CPU latency / chunk | 0.077 ms | 0.170 ms (188× real-time) |
+| Clean F1 / AUROC | 0.958 / 0.972 | **0.958** (tie) / 0.968 |
+| Noisy (held-out DEMAND) F1 / AUROC | 0.960 / 0.970 | 0.943 / 0.947 |
+| False-alarm rate (clean) | 0.224 | **0.130** |
+| Endpoint latency (clean) | 112 ms | **44 ms** |
+| Params | 309,633 | **302,980** |
+| INT8 ONNX | ❌ fails to run (`ConvInteger`) | ✅ **0.457 MB (2.82×), 1.29 pp F1 drop** |
 
-ClearVAD wins accuracy, miss-rate, short-silence detection, size, INT8-deployability, and
-onset/endpoint latency. Honest caveats (segment-level eval labels, MUSAN-noise train/eval,
-tunable FAR) are documented in `reports/final_benchmark.md`.
+**Honest framing:** on clean frame-accurate audio ClearVAD **matches** Silero (F1 tied, AUROC within
+0.4 pt) and **wins** on false-alarm rate, endpoint latency, size, and INT8-deployability; Silero
+still edges AUROC and is modestly more noise-robust. The novel CfC core beat the prior G-SSM core
+(0.947 vs 0.915, same frontend/encoder/head). Full methodology + the earlier segment-level numbers
+(which were convention-biased and are NOT an accuracy claim) are documented in
+`reports/final_benchmark.md`.
 
 ---
 
