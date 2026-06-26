@@ -25,7 +25,7 @@ from clearvad.export.quantize import collect_calibration_samples, export_fp16, q
 from clearvad.export.to_onnx import export_fp32, onnx_size_mb  # noqa: E402
 from clearvad.export.validate_onnx import OrtVADRunner, validate_all  # noqa: E402
 from clearvad.evaluation.metrics import summarize  # noqa: E402
-from clearvad.model.clearvad_model import ClearVADModel  # noqa: E402
+from clearvad.model.factory import build_model  # noqa: E402
 from clearvad.utils.config import load_yaml  # noqa: E402
 from clearvad.utils.logging_utils import get_logger, write_json  # noqa: E402
 
@@ -63,9 +63,10 @@ def main() -> None:
     args = ap.parse_args()
 
     import torch
-    model = ClearVADModel.from_config(load_yaml(args.model_config)).eval()
+    cfg = load_yaml(args.model_config)
+    model = build_model(cfg).eval()
     model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
-    LOG.info("Model: %s", model.count_by_module())
+    LOG.info("Model arch=%s: %s", cfg.get("arch", "gssm"), model.count_by_module())
 
     dist = Path(args.dist_dir)
     fp32 = str(dist / "clearvad_base.onnx")
