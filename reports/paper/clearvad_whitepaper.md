@@ -1,127 +1,137 @@
-# ClearVAD: A Compact, INT8-Deployable Gated-SSM Voice Activity Detector that Matches and Exceeds Silero with No Human Labels
+# ClearVAD: A Compact, INT8-Deployable Continuous-Time (CfC) Voice Activity Detector Matching Silero with No Human Labels
 
 **Technical Report / White Paper — draft for arXiv + company release**
 
 ## Abstract
 
-We present **ClearVAD**, a 220K-parameter streaming voice activity detector built on a causal
-**Gated State-Space Model (G-SSM)** temporal core in place of the LSTM used by Silero VAD v5.
-ClearVAD is trained with **no human-annotated VAD labels** — using a combination of (i) knowledge
-distillation from Silero and (ii) supervised training on *programmatically constructed* clips
-(real speech + real noise interleaved at known boundaries). On independent construction-labeled
-evaluations ClearVAD **exceeds Silero on accuracy** on both clean speech (F1 0.92 vs 0.84, AUC
-0.96 vs 0.84) and real-world noisy speech at 0–12 dB SNR (F1 0.92 vs 0.85, AUC 0.86 vs 0.84, with
-less than half the miss rate), while being **4.5× smaller** (0.29 MB INT8 vs 1.29 MB), **INT8-
-deployable** (Silero's INT8 fails to run), and lower-latency on onset/endpoint. The model runs at
-0.17 ms per 32 ms chunk on a single CPU thread (188× real-time). We also report a **negative
-result**: distilling from stronger teachers (Pyannote, NeMo MarbleNet) failed to transfer, which
-we trace to a data-construction issue rather than teacher quality — an instructive finding for
-label-free VAD distillation.
+We present **ClearVAD**, a ~303K-parameter streaming voice activity detector whose temporal core is
+a **closed-form continuous-time (CfC) recurrence** (Hasani et al. 2022) — an architecture, to our
+knowledge, not previously applied to VAD — in place of the LSTM used by Silero VAD v5. ClearVAD is
+trained with **no human-annotated VAD labels**: frame-accurate targets are obtained by **forced
+alignment** (torchaudio MMS_FA) of read-speech transcripts, augmented with real noise (MUSAN, ESC-50)
+and real room impulse responses (OpenSLR SLR28). On a **frame-accurate** evaluation (forced-aligned
+labels, scored identically for every model), ClearVAD **matches** Silero on clean speech (F1 0.958
+vs 0.958, AUROC 0.968 vs 0.972) and is near-parity under **unseen** (DEMAND) noise (AUROC 0.947 vs
+0.970), while being **smaller** (0.457 MB INT8 vs 1.29 MB), **INT8-deployable** (Silero's INT8 fails
+to run), with **roughly half the false-alarm rate** (0.130 vs 0.224) and **~2.5× faster endpoint
+latency** (44 ms vs 112 ms). We make two methodological contributions beyond the model: (1) we show
+that the common **segment-level** VAD eval convention (intra-speech pauses labeled as speech) can
+**inflate accuracy by ~40 AUROC points** for a model trained to that convention, and provide a
+forced-alignment eval that removes the bias; and (2) a **controlled architecture ablation** (CfC vs a
+selective state-space / G-SSM core, identical front-end) in which CfC wins (AUROC 0.947 vs 0.915). We
+explicitly **do not claim accuracy superiority** over Silero; the contribution is matching a mature
+production VAD at a fraction of the deployment cost with a novel, tiny, continuous-time core.
 
 ## 1. Introduction
 
 Voice activity detection (VAD) gates nearly every speech pipeline (ASR, diarization, telephony,
 voice agents). Silero VAD v5 is the de-facto open CPU VAD: accurate, ~1.3 MB, LSTM-based. Two
 practical gaps motivate ClearVAD: (1) Silero's INT8 quantization **fails to run** on ONNX Runtime
-(`ConvInteger NOT_IMPLEMENTED`), blocking the smallest edge deployments; (2) endpoint/short-silence
-behavior is governed by a fixed post-processing pipeline. We ask whether a compact **selective
-SSM** core, trained **without human labels**, can match or beat Silero while being substantially
+(`ConvInteger NOT_IMPLEMENTED`), blocking the smallest edge deployments; (2) we ask whether a
+compact, **continuous-time** core trained **without human labels** can match Silero while being
 smaller and INT8-deployable.
 
 Contributions:
-1. **A causal Gated-SSM VAD core** (selective state-space, input-dependent timescale) that is
-   ONNX-exportable via an explicit-loop / parallel-scan duality and INT8-quantizable.
-2. **A label-free training recipe**: distillation from Silero + supervised training on
-   *constructed* real-speech-plus-real-noise clips whose frame labels come from construction.
-3. **Empirical results** exceeding Silero on clean and noisy accuracy at 4.5× smaller size and
-   working INT8.
-4. **A negative result** on multi-teacher distillation and its root-cause analysis.
+1. **A CfC (closed-form continuous-time) VAD core** — a tiny streaming recurrence, ONNX-exportable
+   (no Scan/Loop, no ODE solver) and INT8-quantizable — apparently the first use of CfC for VAD.
+2. **A label-free, frame-accurate training recipe** using forced alignment + real-noise/RIR
+   augmentation, with a study of how accuracy scales with training-data hours.
+3. **A frame-accurate evaluation methodology** that exposes and removes the segment-level
+   convention bias common in VAD reporting.
+4. **A controlled CfC-vs-SSM ablation** and an honest near-parity result vs Silero.
 
 ## 2. Architecture
 
 Input is a 512-sample (32 ms @ 16 kHz) chunk plus 64 samples of left context (576 total).
 
-- **Front-end:** fixed-STFT-style `Conv1d(1→258, k=256, s=128)` → magnitude → 129 features
-  (mirrors Silero's measured front-end; learnable, optionally warm-started from Silero).
-- **Encoder:** 4 depthwise-separable conv blocks, channel schedule 129→128→64→64→128 (lighter
-  than Silero's plain convs; ~38.9K params).
-- **G-SSM temporal core (novel):** a Mamba-style *selective* SSM wrapped in a SiLU gate.
-  Input-dependent Δ (timescale), B, C; diagonal-negative A = −exp(A_log) for stability;
-  recurrence `h_t = exp(Δ_t⊙A)·h_{t-1} + (Δ_t·u_t)⊗B_t`, `y_t = (h_t⊙C_t)Σ + D·u_t`; gated
-  fusion `y·SiLU(z)`; residual. 115K params (< the 132K LSTM it replaces).
+- **Front-end:** STFT-style `Conv1d(1→258, k=256, s=128)` → 129 magnitude features (mirrors Silero;
+  learnable). **Encoder:** 4 depthwise-separable conv blocks (129→128→64→64→128, ~38.9K params).
+  These are shared across architectures so the temporal-core comparison is controlled.
+- **CfC temporal core (novel for VAD):** a 2-layer closed-form continuous-time cell. Each step
+  interpolates two input-dependent candidate states via a time-gated sigmoid,
+  `h_t = ff1(x_t,h_{t-1})·(1−σ(t_a·Δt+t_b)) + ff2(x_t,h_{t-1})·σ(t_a·Δt+t_b)` — elementwise +
+  matmuls only, so it streams (carry `h`) and exports cleanly. Hidden 128, ~198K params.
 - **Head:** `Conv1d(128→1)` → per-chunk logit → sigmoid.
 
-**State** (the SSM hidden `h`, [B,256,16]) is carried across chunks; the encoder runs per-chunk
-on the 576-window (like Silero), so chunked streaming is **exactly equal** to offline processing.
+**State** (`h`, [B,2,128]) is carried across chunks; the encoder runs per-chunk on the 576-window,
+so chunked streaming equals offline processing. The CfC recurrence over the T_enc=3 sub-frames
+unrolls into a static opset-17 graph (no Scan/Loop). Total **302,980** params (< Silero's 309,633).
 
-**Train/deploy duality.** The SSM recurrence is implemented as a log-depth **associative scan**
-for fast training and as an **explicit unrolled loop** for export — mathematically identical
-(verified to <1e-5), the loop yielding a clean opset-17 ONNX graph with no Scan/Loop op. Total
-220,292 params.
+A selective state-space (Mamba-style **G-SSM**) core with the *same* front-end/encoder/head is
+retained as an ablation baseline (§5).
 
 ## 3. Training without human labels
 
-**Distillation (clean).** Synthetic + real unlabeled speech is labeled by Silero; ClearVAD is
-trained to match (temperature-scaled KL + boundary-weighted BCE + temporal smoothness), class-
-balanced for the speech minority. Two stages (soft → +boundary/smoothness).
+**Frame-accurate labels via forced alignment.** We align LibriSpeech transcripts to audio with
+torchaudio's MMS_FA aligner, yielding word time-spans; inter-word / leading / trailing silence is
+labeled non-speech. A 100 ms min-silence smoothing (co-articulation gaps are not pauses) and 40 ms
+word-edge padding (MMS_FA trims onsets) give clean per-frame targets — **no human VAD annotation**.
 
-**Constructed supervision (the accuracy unlock).** We build clips by interleaving real speech
-(LibriSpeech) with real silence/noise (MUSAN) at **known boundaries**, and mixing noise into
-speech at 0–20 dB SNR. Because we place the segments, we have **exact frame labels with no human
-annotation**, including realistic *within-clip* speech↔silence transitions. Supervised training on
-these labels lets ClearVAD exceed the Silero teacher.
+**Construction + augmentation.** Aligned speech is interleaved with real silence/noise at known
+boundaries and mixed with real noise (MUSAN, ESC-50) at 0–20 dB SNR; clips are further augmented
+with **real room impulse responses** (OpenSLR SLR28), mu-law codec distortion, and gain. The final
+model is trained **purely supervised** on the forced-alignment labels (no teacher).
 
-**Negative result (multi-teacher).** Distilling from stronger teachers (Pyannote segmentation,
-NeMo Frame-VAD MarbleNet) — single and ensembled with Silero — consistently *failed*: ~0.93
-training agreement but near-random held-out AUC. Root cause was **not** teacher quality (NeMo was
-cleanly time-aligned with Silero, corr 0.88) but the **training data**: continuous-real-speech +
-synthetic clips gave the strong teachers degenerate "real-vs-synthetic" labels (they don't fire on
-synthetic), so the student never learned within-audio boundaries. The fix was the constructed data
-above, where labels are exact regardless of teacher. We report this because it is a likely pitfall
-for others attempting label-free VAD distillation.
+**Data scaling.** Accuracy improves monotonically with training hours and augmentation diversity;
+the clean-eval gap to Silero closed 2.5 → 1.7 → 0.9 → 0.45 AUROC points as speech scaled 1 h → 20 h,
+with diminishing returns approaching parity (using ~0.4 % of available LibriSpeech).
 
-## 4. Deployment: INT8 ONNX
+## 4. Evaluation methodology: segment-level vs frame-accurate
 
-A single ONNX binary exports at opset-17 (loop-unrolled SSM). INT8 **static** quantization
-(QDQ, per-channel) quantizes only Conv/Gemm/MatMul; the **SSM recurrence stays FP32** — the
-precise reason Silero's naive INT8 fails (control-flow + recurrence ops). Result: **0.286 MB**
-(4.5× smaller than Silero's 1.29 MB), runs on ONNX Runtime CPU with streaming state carry, at
-**0.170 ms / 32 ms chunk** (188× real-time), FP32→INT8 accuracy drop ≈ 3–4 pp (INT8 still exceeds
-Silero on both clean and noisy evals).
+Many VAD evals label a "speech segment" as all-speech, including intra-utterance pauses. A model
+trained to that convention scores its own bias back: our segment-trained model reached F1 0.92 /
+AUROC 0.96 on segment-level labels but **AUROC 0.514 (chance)** on forced-aligned frame-accurate
+labels — it had learned speech-*region* detection, not frame-level VAD, and failed to release on
+real multi-second pauses. We therefore evaluate **only** on frame-accurate forced-aligned labels,
+scored identically for every model (Silero, ClearVAD, WebRTC). This is a cautionary, reusable
+finding for VAD reporting.
 
-## 5. Results
+## 5. Deployment: INT8 ONNX
 
-See `reports/final_benchmark.md`. Summary on independent construction-labeled evals:
+A single ONNX binary exports at opset-17 (CfC unrolled). INT8 **static** quantization (QDQ,
+per-channel) yields **0.457 MB** (2.82× smaller than Silero's 1.29 MB), runs on ONNX Runtime CPU
+with streaming state carry — where Silero's INT8 fails — at **0.161 ms / 32 ms chunk** (~200×
+real-time). FP32→INT8 F1 drop is **1.29 pp** (0.958 → 0.945); mixed-precision was not required.
 
-| | Silero v5 | ClearVAD (FP32) | ClearVAD (INT8) |
+## 6. Results
+
+Frame-accurate eval (forced alignment; identical labels for all models). Full detail in
+`reports/final_benchmark.md`.
+
+| | Silero v5 | **ClearVAD (CfC)** | WebRTC |
 |--|--|--|--|
-| Clean F1 / AUC | 0.838 / 0.836 | **0.923 / 0.957** | 0.892 |
-| Noisy (0–12 dB) F1 / AUC | 0.848 / 0.842 | **0.919 / 0.856** | 0.882 |
-| Size | 1.29 MB | 0.88 MB | **0.286 MB** |
-| Onset / endpoint (ms) | 108 / 47 | **17–23 / 13–30** | — |
+| Clean F1 / AUROC | 0.958 / 0.972 | **0.958** / 0.968 | 0.922 / 0.776 |
+| Noisy (held-out DEMAND) F1 / AUROC | 0.960 / 0.970 | 0.943 / 0.947 | 0.946 / 0.882 |
+| False-alarm rate (clean) | 0.224 | **0.130** | 0.516 |
+| Onset / endpoint (clean, ms) | 28 / 112 | 23 / **44** | 4 / 180 |
+| Params / INT8 size | 309,633 / ❌ INT8 | 302,980 / **0.457 MB** | — |
 
-ClearVAD wins accuracy (F1, AUC, miss-rate), short-silence detection, size, and onset/endpoint
-latency. Silero retains a raw per-chunk CPU-latency advantage (0.077 ms vs 0.170 ms); both are far
-under real-time.
+**Architecture ablation:** swapping the temporal core G-SSM→CfC (identical front-end/encoder/head)
+lifted clean AUROC **0.915 → 0.947** — CfC is the stronger compact VAD core. ClearVAD **matches**
+Silero on clean (F1 tied), is near-parity on noisy, and **wins** false-alarm rate, endpoint latency,
+size, and INT8-deployability; Silero retains a small AUROC edge and a raw per-chunk CPU-latency
+advantage (0.077 vs 0.161 ms; both far under real-time).
 
-## 6. Limitations & honest caveats
+## 7. Limitations & honest caveats
 
-- **Segment-level eval labels**: speech segments are labeled all-speech (incl. intra-pauses), so
-  part of the F1 gap is convention-alignment; the AUC / miss-rate / short-silence-on-true-gaps
-  wins are convention-independent.
-- **Noise generalization**: training and noisy eval both use MUSAN — "robust to this noise family";
-  held-out-noise (DEMAND/WHAM) and a human-labeled benchmark (AVA-Speech) are the next validations.
-- **FAR under noise** is marginally worse than Silero at the default threshold (tunable; ClearVAD's
-  ROC dominates).
-- **CPU latency** is higher than Silero's fused LSTM.
+- **No accuracy-superiority claim.** Silero leads AUROC on both clean (0.972 vs 0.968) and noisy
+  (0.970 vs 0.947); ClearVAD matches on clean and is near-parity on noisy. Silero is modestly more
+  noise-robust, attributable to its far larger (thousand-hour) training corpus.
+- **Labels are forced-alignment-derived**, not fully human; a human-labeled benchmark (AVA-Speech)
+  is the next external validation.
+- **Data budget.** Trained on ~20 h of English read speech + 3 noise families; closing the residual
+  noise gap further would need a step-change in data scale (sharded streaming, 50–100 h+), with
+  parity the likely outcome (diminishing returns observed).
+- **CPU per-chunk latency** is higher than Silero's fused LSTM (both ≫ real-time).
 
-## 7. Conclusion
+## 8. Conclusion
 
-A compact Gated-SSM VAD, trained with no human labels, **matches and exceeds Silero VAD v5 on
-accuracy** in both clean and realistic-noise conditions, while being **4.5× smaller and INT8-
-deployable** where Silero is not. The data-construction insight (and the multi-teacher negative
-result) are reusable lessons for label-free VAD.
+A tiny continuous-time (CfC) VAD, trained with **no human labels** on forced-alignment targets,
+**matches Silero VAD v5** on clean frame-accurate accuracy and is **near-parity under unseen noise**,
+while being smaller, **INT8-deployable** where Silero is not, with lower false-alarm rate and faster
+endpoint latency. The frame-accurate evaluation (which exposes segment-level convention bias) and
+the CfC-vs-SSM ablation are reusable contributions for compact, label-free VAD.
 
 ---
 *Reproducibility: full code, configs, eval harness, and per-phase reports in the repository.
-All seeds fixed; results in `reports/`.*
+All seeds fixed; results in `reports/`. Locked model: `checkpoints_cfc_20h` (config `liquidvad_l2`).*
