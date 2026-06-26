@@ -19,6 +19,8 @@ dist/*.whl
 experiments/*/
 *.wav
 *.flac
+# ...except the bundled demo samples for the benchmark web app:
+!clearvad/serving/static/samples/*.wav
 
 # Reports are generated but we DO want to commit the markdown/json/csv summaries.
 # Ignore only large raw dumps:

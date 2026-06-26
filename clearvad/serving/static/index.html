@@ -5,24 +5,25 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>ClearVAD — VAD Benchmark Studio</title>
 <style>
-  :root{--bg:#0f1419;--panel:#171e26;--line:#243240;--fg:#e6edf3;--mut:#8aa0b3;--accent:#3ddc84;--accent2:#5aa9ff}
+  :root{--bg:#0f1419;--panel:#171e26;--line:#243240;--fg:#e6edf3;--mut:#8aa0b3;--accent:#3ddc84;--accent2:#5aa9ff;--warn:#d08770}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
   header{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px}
   header h1{font-size:18px;margin:0}
   header .sub{color:var(--mut);font-size:13px}
-  .wrap{display:grid;grid-template-columns:300px 1fr;gap:0;min-height:calc(100vh - 58px)}
+  .wrap{display:grid;grid-template-columns:300px 1fr;min-height:calc(100vh - 58px)}
   .controls{padding:18px;border-right:1px solid var(--line);background:var(--panel)}
   .main{padding:18px 22px;overflow-x:auto}
   h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:22px 0 10px}
   .controls h2:first-child{margin-top:0}
   label{display:block;margin:10px 0 4px;color:var(--mut)}
-  input[type=file],input[type=number]{width:100%;background:#0c1116;border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:8px}
+  input[type=file],input[type=number],input[type=text]{width:100%;background:#0c1116;border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:8px}
   input[type=range]{width:100%}
   .models label{display:flex;align-items:center;gap:8px;color:var(--fg);margin:6px 0;cursor:pointer}
   .na{color:#c9555b;font-size:12px}
   button{margin-top:14px;width:100%;background:var(--accent);color:#04140a;border:0;border-radius:8px;padding:11px;font-weight:700;cursor:pointer}
   button.alt{background:transparent;color:var(--accent2);border:1px solid var(--accent2)}
+  button.chip{width:auto;display:inline-block;margin:3px;padding:5px 9px;font-weight:400;font-size:12px}
   button:disabled{opacity:.5;cursor:default}
   .row{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px}
   .row .name{font-weight:700;display:flex;justify-content:space-between;align-items:center}
@@ -30,6 +31,7 @@
   canvas{width:100%;height:40px;display:block;margin:8px 0;border-radius:6px;background:#0c1116}
   .cards{display:flex;gap:18px;flex-wrap:wrap;color:var(--mut);font-size:12px}
   .cards b{color:var(--fg);font-size:15px;font-variant-numeric:tabular-nums}
+  #ms.on{color:var(--accent)}
   table{border-collapse:collapse;width:100%;margin-top:6px;font-variant-numeric:tabular-nums}
   th,td{border-bottom:1px solid var(--line);padding:7px 10px;text-align:right}
   th:first-child,td:first-child{text-align:left}
@@ -43,12 +45,13 @@
 <body>
 <header>
   <h1>🎙️ ClearVAD — VAD Benchmark Studio</h1>
-  <span class="sub">test our CfC model against others • live metrics • session leaderboard</span>
+  <span class="sub">live mic • upload/sample • multi-model metrics • session leaderboard</span>
 </header>
 <div class="wrap">
   <div class="controls">
     <h2>Audio</h2>
     <input type="file" id="file" accept="audio/*"/>
+    <div id="samples" class="muted" style="margin-top:8px"></div>
     <label>Threshold <span id="thv">0.50</span></label>
     <input type="range" id="thr" min="0.05" max="0.95" step="0.05" value="0.5"/>
     <label>Min speech (ms)</label><input type="number" id="msp" value="100"/>
@@ -57,18 +60,30 @@
     <h2>Models</h2>
     <div class="models" id="models"></div>
 
-    <button id="run" disabled>Analyze ▶</button>
+    <button id="run" disabled>Analyze upload ▶</button>
     <button id="bench" class="alt">Accuracy benchmark (labeled set)</button>
     <label style="margin-top:8px">Benchmark cache (server path)</label>
-    <input type="number" style="display:none"/>
-    <input id="cache" type="text" value="data/eval/aligned_eval_pad40.npz"
-           style="width:100%;background:#0c1116;border:1px solid var(--line);color:var(--fg);border-radius:7px;padding:8px"/>
+    <input id="cache" type="text" value="data/eval/aligned_eval_pad40.npz"/>
     <div id="status"></div>
   </div>
 
   <div class="main">
-    <h2>Live result <span class="muted" id="meta"></span></h2>
-    <div id="tracks"><div class="muted">Upload a wav and hit Analyze.</div></div>
+    <h2>🎤 Live mic — ClearVAD realtime endpointing</h2>
+    <div class="row">
+      <button id="mic" style="width:auto;margin:0">Start mic ▶</button>
+      <span id="micstate" class="muted" style="margin-left:12px">idle</span>
+      <canvas id="miccv"></canvas>
+      <div class="cards">
+        <span>prob <b id="mp">0.00</b></span>
+        <span>state <b id="ms">—</b></span>
+        <span>utterances <b id="mu">0</b></span>
+        <span>last endpoint <b id="ml">—</b></span>
+      </div>
+      <div class="muted">Streams 32 ms chunks to <code>/stream</code>; speech/endpoint via your threshold + min-silence. ClearVAD only (the realtime contract).</div>
+    </div>
+
+    <h2>Result <span class="muted" id="meta"></span></h2>
+    <div id="tracks"><div class="muted">Pick a sample, upload a wav, or use the mic.</div></div>
 
     <h2>Session leaderboard <span class="muted">(avg over runs — click a header to sort)</span></h2>
     <table id="board"><thead><tr>
@@ -79,8 +94,7 @@
 
     <h2>Accuracy leaderboard <span class="muted">(labeled eval — AUROC / F1 / FAR / MR)</span></h2>
     <table id="acc"><thead><tr>
-      <th data-k="model">model</th><th data-k="auroc">AUROC</th><th data-k="pr_auc">PR-AUC</th>
-      <th data-k="f1">F1</th><th data-k="far">FAR</th><th data-k="mr">MR</th>
+      <th>model</th><th>AUROC</th><th>PR-AUC</th><th>F1</th><th>FAR</th><th>MR</th>
     </tr></thead><tbody><tr><td class="muted" colspan="6">Run the accuracy benchmark.</td></tr></tbody></table>
   </div>
 </div>
@@ -91,91 +105,119 @@ $('#thr').oninput=e=>$('#thv').textContent=(+e.target.value).toFixed(2);
 
 fetch('models').then(r=>r.json()).then(d=>{
   const box=$('#models');
-  d.available.forEach((m,i)=>{
-    box.insertAdjacentHTML('beforeend',
-     `<label><input type=checkbox value="${m}" ${i<4?'checked':''}/> <span style="color:${COL[m]||'#fff'}">${m}</span></label>`);
-  });
-  Object.entries(d.unavailable||{}).forEach(([m,e])=>
-    box.insertAdjacentHTML('beforeend',`<div class="na">${m}: unavailable</div>`));
-  if(!d.available.length) $('#status').textContent='No models loaded on the server.';
+  d.available.forEach((m,i)=>box.insertAdjacentHTML('beforeend',
+     `<label><input type=checkbox value="${m}" ${i<4?'checked':''}/> <span style="color:${COL[m]||'#fff'}">${m}</span></label>`));
+  Object.keys(d.unavailable||{}).forEach(m=>box.insertAdjacentHTML('beforeend',`<div class="na">${m}: unavailable</div>`));
+  if(!d.available.length)$('#status').textContent='No models loaded on the server.';
 });
-$('#file').onchange=()=>{$('#run').disabled=!$('#file').files.length;};
+fetch('samples').then(r=>r.json()).then(d=>{
+  const box=$('#samples');
+  if(!d.samples||!d.samples.length){box.textContent='(no bundled samples — run scripts/make_demo_samples.py)';return;}
+  box.innerHTML='samples: ';
+  d.samples.forEach(n=>{const b=document.createElement('button');b.textContent=n;b.className='alt chip';
+    b.onclick=()=>analyzeSample(n);box.appendChild(b);});
+});
+$('#file').onchange=()=>$('#run').disabled=!$('#file').files.length;
+
+function selModels(){return [...document.querySelectorAll('#models input:checked')].map(c=>c.value);}
 
 function drawTrack(cv,track,segs,dur,color){
-  const ctx=cv.getContext('2d'), W=cv.width=cv.clientWidth*devicePixelRatio, H=cv.height=40*devicePixelRatio;
-  ctx.clearRect(0,0,W,H);
-  const n=track.length;
-  for(let i=0;i<n;i++){const p=track[i];ctx.fillStyle=`rgba(61,220,132,${Math.max(0.06,p)})`;
-    ctx.fillRect(i/n*W,H*(1-p),Math.ceil(W/n)+1,H*p);}
+  const ctx=cv.getContext('2d'),W=cv.width=cv.clientWidth*devicePixelRatio,H=cv.height=40*devicePixelRatio;
+  ctx.clearRect(0,0,W,H);const n=track.length;
+  for(let i=0;i<n;i++){const p=track[i];ctx.fillStyle=`rgba(61,220,132,${Math.max(0.06,p)})`;ctx.fillRect(i/n*W,H*(1-p),Math.ceil(W/n)+1,H*p);}
   ctx.strokeStyle=color;ctx.lineWidth=2*devicePixelRatio;ctx.beginPath();
   for(let i=0;i<n;i++){const x=i/n*W,y=H*(1-track[i]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();
-  ctx.fillStyle='rgba(90,169,255,.18)';
-  segs.forEach(s=>{const x0=s.start_s/dur*W,x1=s.end_s/dur*W;ctx.fillRect(x0,0,x1-x0,H);});
+  ctx.fillStyle='rgba(90,169,255,.18)';segs.forEach(s=>{const x0=s.start_s/dur*W;ctx.fillRect(x0,0,(s.end_s-s.start_s)/dur*W,H);});
 }
-
 function renderBoard(){
-  const rows=Object.entries(agg).map(([m,a])=>({model:m,runs:a.n,
-    latency:a.latency/a.n,rtf:a.rtf/a.n,speech:a.speech/a.n*100,agreement:a.agreement/a.n*100}));
+  const rows=Object.entries(agg).map(([m,a])=>({model:m,runs:a.n,latency:a.latency/a.n,rtf:a.rtf/a.n,speech:a.speech/a.n*100,agreement:a.agreement/a.n*100}));
   const k=boardSort.k;rows.sort((x,y)=>k==='model'?x.model.localeCompare(y.model)*boardSort.dir:(x[k]-y[k])*boardSort.dir);
   const best=rows.length?rows.reduce((b,r)=>r.agreement>b.agreement?r:b):null;
   $('#board tbody').innerHTML=rows.map(r=>`<tr class="${best&&r.model===best.model?'win':''}">
-    <td style="color:${COL[r.model]||'#fff'}">${r.model}</td><td>${r.runs}</td>
-    <td>${r.latency.toFixed(3)}</td><td>${r.rtf.toFixed(4)}</td>
-    <td>${r.speech.toFixed(1)}</td><td>${r.agreement.toFixed(1)}</td></tr>`).join('');
+    <td style="color:${COL[r.model]||'#fff'}">${r.model}</td><td>${r.runs}</td><td>${r.latency.toFixed(3)}</td>
+    <td>${r.rtf.toFixed(4)}</td><td>${r.speech.toFixed(1)}</td><td>${r.agreement.toFixed(1)}</td></tr>`).join('');
 }
-document.querySelectorAll('#board th').forEach(th=>th.onclick=()=>{
-  const k=th.dataset.k;boardSort.dir=(boardSort.k===k?-boardSort.dir:-1);boardSort.k=k;renderBoard();});
+document.querySelectorAll('#board th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;boardSort.dir=(boardSort.k===k?-boardSort.dir:-1);boardSort.k=k;renderBoard();});
+
+function renderAnalyze(d){
+  $('#meta').textContent=`${d.filename} • ${d.duration_s}s • ${d.chunk_ms}ms chunks`;
+  const tg=$('#tracks');tg.innerHTML='';
+  for(const [m,r] of Object.entries(d.models)){
+    const id='cv_'+m;
+    tg.insertAdjacentHTML('beforeend',`<div class="row">
+      <div class="name"><span style="color:${COL[m]||'#fff'}">${m}</span><span class="tag">${r.n_chunks} chunks</span></div>
+      <canvas id="${id}"></canvas>
+      <div class="cards"><span>latency <b>${r.latency_ms_per_chunk}</b> ms/chunk</span><span>RTF <b>${r.rtf}</b></span>
+        <span>speech <b>${(r.speech_ratio*100).toFixed(1)}</b>%</span><span>agreement <b>${(r.agreement*100).toFixed(1)}</b>%</span>
+        <span>segments <b>${r.segments.length}</b></span></div>
+      <div class="seg">${r.segments.slice(0,8).map(s=>`[${s.start_s}–${s.end_s}]`).join(' ')}${r.segments.length>8?' …':''}</div></div>`);
+    drawTrack($('#'+id),r.track,r.segments,d.duration_s,COL[m]||'#fff');
+    const a=agg[m]||(agg[m]={n:0,latency:0,rtf:0,speech:0,agreement:0});
+    a.n++;a.latency+=r.latency_ms_per_chunk;a.rtf+=r.rtf;a.speech+=r.speech_ratio;a.agreement+=r.agreement;
+  }
+  renderBoard();$('#status').textContent='Done.';
+}
+function formCommon(fd){fd.append('models',selModels().join(','));fd.append('threshold',$('#thr').value);
+  fd.append('min_speech_ms',$('#msp').value);fd.append('min_silence_ms',$('#msi').value);return fd;}
 
 $('#run').onclick=async()=>{
-  const sel=[...document.querySelectorAll('#models input:checked')].map(c=>c.value);
-  if(!sel.length||!$('#file').files.length)return;
+  if(!selModels().length||!$('#file').files.length)return;
   $('#status').textContent='Analyzing…';$('#run').disabled=true;
-  const fd=new FormData();fd.append('file',$('#file').files[0]);
-  fd.append('models',sel.join(','));fd.append('threshold',$('#thr').value);
-  fd.append('min_speech_ms',$('#msp').value);fd.append('min_silence_ms',$('#msi').value);
-  try{
-    const d=await (await fetch('analyze',{method:'POST',body:fd})).json();
-    $('#meta').textContent=`${d.filename} • ${d.duration_s}s • ${d.chunk_ms}ms chunks`;
-    const tg=$('#tracks');tg.innerHTML='';
-    for(const [m,r] of Object.entries(d.models)){
-      const id='cv_'+m;
-      tg.insertAdjacentHTML('beforeend',`<div class="row">
-        <div class="name"><span style="color:${COL[m]||'#fff'}">${m}</span>
-          <span class="tag">${r.n_chunks} chunks</span></div>
-        <canvas id="${id}"></canvas>
-        <div class="cards">
-          <span>latency <b>${r.latency_ms_per_chunk}</b> ms/chunk</span>
-          <span>RTF <b>${r.rtf}</b></span>
-          <span>speech <b>${(r.speech_ratio*100).toFixed(1)}</b>%</span>
-          <span>agreement <b>${(r.agreement*100).toFixed(1)}</b>%</span>
-          <span>segments <b>${r.segments.length}</b></span>
-        </div>
-        <div class="seg">${r.segments.slice(0,8).map(s=>`[${s.start_s}–${s.end_s}]`).join(' ')}${r.segments.length>8?' …':''}</div>
-      </div>`);
-      drawTrack($('#'+id),r.track,r.segments,d.duration_s,COL[m]||'#fff');
-      const a=agg[m]||(agg[m]={n:0,latency:0,rtf:0,speech:0,agreement:0});
-      a.n++;a.latency+=r.latency_ms_per_chunk;a.rtf+=r.rtf;a.speech+=r.speech_ratio;a.agreement+=r.agreement;
-    }
-    renderBoard();$('#status').textContent='Done.';
-  }catch(e){$('#status').textContent='Error: '+e;}
+  const fd=formCommon(new FormData());fd.append('file',$('#file').files[0]);
+  try{renderAnalyze(await(await fetch('analyze',{method:'POST',body:fd})).json());}
+  catch(e){$('#status').textContent='Error: '+e;}
   $('#run').disabled=false;
 };
-
+async function analyzeSample(name){
+  if(!selModels().length)return;
+  $('#status').textContent='Analyzing sample '+name+'…';
+  const fd=formCommon(new FormData());fd.append('name',name);
+  try{const d=await(await fetch('analyze_sample',{method:'POST',body:fd})).json();
+    if(d.error){$('#status').textContent=d.error;return;}renderAnalyze(d);}
+  catch(e){$('#status').textContent='Error: '+e;}
+}
 $('#bench').onclick=async()=>{
-  const sel=[...document.querySelectorAll('#models input:checked')].map(c=>c.value);
-  $('#status').textContent='Running accuracy benchmark (this can take a bit)…';
-  const fd=new FormData();fd.append('cache',$('#cache').value);fd.append('models',sel.join(','));
-  fd.append('threshold',$('#thr').value);
-  try{
-    const d=await (await fetch('benchmark',{method:'POST',body:fd})).json();
+  $('#status').textContent='Running accuracy benchmark…';
+  const fd=new FormData();fd.append('cache',$('#cache').value);fd.append('models',selModels().join(','));fd.append('threshold',$('#thr').value);
+  try{const d=await(await fetch('benchmark',{method:'POST',body:fd})).json();
     if(d.error){$('#status').textContent=d.error;return;}
-    const rows=Object.entries(d.models).map(([m,v])=>({model:m,...v})).sort((a,b)=>b.auroc-a.auroc);
-    const best=rows[0];
+    const rows=Object.entries(d.models).map(([m,v])=>({model:m,...v})).sort((a,b)=>b.auroc-a.auroc);const best=rows[0];
     $('#acc tbody').innerHTML=rows.map(r=>`<tr class="${r.model===best.model?'win':''}">
-      <td style="color:${COL[r.model]||'#fff'}">${r.model}</td><td>${r.auroc}</td><td>${r.pr_auc}</td>
-      <td>${r.f1}</td><td>${r.far}</td><td>${r.mr}</td></tr>`).join('');
+      <td style="color:${COL[r.model]||'#fff'}">${r.model}</td><td>${r.auroc}</td><td>${r.pr_auc}</td><td>${r.f1}</td><td>${r.far}</td><td>${r.mr}</td></tr>`).join('');
     $('#status').textContent=`Benchmark on ${d.n_sequences} sequences done.`;
   }catch(e){$('#status').textContent='Error: '+e;}
+};
+
+/* ---- live mic over WebSocket (ClearVAD realtime) ---- */
+let micCtx,micNode,micStream,micGain,ws,micProbs=[],speaking=false,silcount=0,utt=0;
+function drawMic(){const cv=$('#miccv'),ctx=cv.getContext('2d'),W=cv.width=cv.clientWidth*devicePixelRatio,H=cv.height=40*devicePixelRatio;
+  ctx.clearRect(0,0,W,H);const n=micProbs.length,M=300;
+  for(let i=0;i<n;i++){const p=micProbs[i];ctx.fillStyle=`rgba(61,220,132,${Math.max(0.06,p)})`;ctx.fillRect(i/M*W,H*(1-p),W/M+1,H*p);}
+  const thr=+$('#thr').value;ctx.strokeStyle='#5aa9ff';ctx.beginPath();ctx.moveTo(0,H*(1-thr));ctx.lineTo(W,H*(1-thr));ctx.stroke();}
+function stopMic(){try{micNode&&micNode.disconnect();micGain&&micGain.disconnect();micStream&&micStream.getTracks().forEach(t=>t.stop());micCtx&&micCtx.close();}catch(e){}
+  if(ws){ws.close();ws=null;}$('#mic').textContent='Start mic ▶';$('#micstate').textContent='stopped';$('#ms').textContent='—';$('#ms').className='';}
+$('#mic').onclick=async()=>{
+  if(ws){stopMic();return;}
+  micProbs=[];speaking=false;silcount=0;
+  try{
+    ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/stream');
+    ws.onmessage=ev=>{const d=JSON.parse(ev.data);if(d.prob==null)return;const p=d.prob,thr=+$('#thr').value,minSil=Math.max(1,Math.round(+$('#msi').value/32));
+      micProbs.push(p);if(micProbs.length>300)micProbs.shift();$('#mp').textContent=p.toFixed(2);drawMic();
+      if(p>=thr){if(!speaking){speaking=true;$('#ms').textContent='SPEAKING';$('#ms').className='on';}silcount=0;}
+      else if(speaking){silcount++;if(silcount>=minSil){speaking=false;utt++;$('#mu').textContent=utt;$('#ml').textContent=Math.round(silcount*32)+'ms';$('#ms').textContent='silent';$('#ms').className='';}}};
+    ws.onclose=()=>$('#micstate').textContent='stopped';
+    ws.onerror=()=>$('#micstate').textContent='ws error';
+    ws.onopen=async()=>{
+      micStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:false}});
+      micCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+      const src=micCtx.createMediaStreamSource(micStream);
+      micNode=micCtx.createScriptProcessor(512,1,1);
+      micNode.onaudioprocess=e=>{if(ws&&ws.readyState===1)ws.send(new Float32Array(e.inputBuffer.getChannelData(0)).buffer);};
+      micGain=micCtx.createGain();micGain.gain.value=0;            // no speaker feedback
+      src.connect(micNode);micNode.connect(micGain);micGain.connect(micCtx.destination);
+      $('#micstate').textContent='listening @ '+micCtx.sampleRate+' Hz';$('#mic').textContent='Stop mic ⏹';
+    };
+  }catch(e){$('#micstate').textContent='mic error: '+e;}
 };
 </script>
 </body>

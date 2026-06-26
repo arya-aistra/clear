@@ -21,22 +21,27 @@ from pathlib import Path
 from typing import Dict, List
 
 import numpy as np
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse
 
-from clearvad.serving.app import CHUNK, SAMPLE_RATE, _linear_resample, _Model, _segments
+from clearvad.serving.app import (CHUNK, CONTEXT, SAMPLE_RATE, _linear_resample,
+                                  _Model, _segments)
 
 app = FastAPI(title="ClearVAD Benchmark")
 _FNS: Dict[str, object] = {}
 _NOTES: Dict[str, str] = {}
+_CLEARVAD: object = None
 _STATIC = Path(__file__).parent / "static" / "index.html"
+_SAMPLES = Path(__file__).parent / "static" / "samples"
 
 
 def _load_models() -> None:
+    global _CLEARVAD
     if _FNS or _NOTES:
         return
     try:                                                   # ClearVAD via its INT8 ONNX binary
         m = _Model(os.environ.get("CLEARVAD_MODEL", "dist/clearvad_lite.onnx"))
+        _CLEARVAD = m                                      # kept for per-chunk WS streaming
         _FNS["clearvad"] = m.stream
     except Exception as exc:  # noqa: BLE001
         _NOTES["clearvad"] = repr(exc)
@@ -95,18 +100,17 @@ def _run_one(name: str, audio: np.ndarray) -> dict:
             "compute_ms": round(elapsed * 1000, 2)}
 
 
-@app.post("/analyze")
-async def analyze(file: UploadFile = File(...), models: str = Form("clearvad"),
-                  threshold: float = Form(0.5), min_speech_ms: float = Form(100.0),
-                  min_silence_ms: float = Form(100.0)) -> dict:
-    _load_models()
+def _decode(raw_bytes: bytes) -> np.ndarray:
     import soundfile as sf
-    audio, sr = sf.read(io.BytesIO(await file.read()), dtype="float32", always_2d=False)
+    audio, sr = sf.read(io.BytesIO(raw_bytes), dtype="float32", always_2d=False)
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
-    audio = _linear_resample(np.asarray(audio, np.float32), int(sr))
-    chosen = [m for m in models.split(",") if m in _FNS]
+    return _linear_resample(np.asarray(audio, np.float32), int(sr))
 
+
+def _analyze_core(audio: np.ndarray, models: str, threshold: float, min_speech_ms: float,
+                  min_silence_ms: float, filename: str) -> dict:
+    chosen = [m for m in models.split(",") if m in _FNS]
     raw = {m: _run_one(m, audio) for m in chosen}
     K = min((r["n_chunks"] for r in raw.values()), default=0)
     # consensus = majority speech vote per chunk across the chosen models
@@ -126,8 +130,69 @@ async def analyze(file: UploadFile = File(...), models: str = Form("clearvad"),
             "speech_ratio": round(float(np.mean(r["probs"] >= threshold)) if r["n_chunks"] else 0.0, 4),
             "agreement": round(agree, 4),
         }
-    return {"filename": file.filename, "duration_s": round(len(audio) / SAMPLE_RATE, 2),
+    return {"filename": filename, "duration_s": round(len(audio) / SAMPLE_RATE, 2),
             "chunk_ms": round(CHUNK / SAMPLE_RATE * 1000, 1), "models": results}
+
+
+@app.post("/analyze")
+async def analyze(file: UploadFile = File(...), models: str = Form("clearvad"),
+                  threshold: float = Form(0.5), min_speech_ms: float = Form(100.0),
+                  min_silence_ms: float = Form(100.0)) -> dict:
+    _load_models()
+    audio = _decode(await file.read())
+    return _analyze_core(audio, models, threshold, min_speech_ms, min_silence_ms, file.filename)
+
+
+@app.get("/samples")
+def samples() -> dict:
+    """Bundled demo wavs (zero-upload)."""
+    files = sorted(_SAMPLES.glob("*.wav")) if _SAMPLES.exists() else []
+    return {"samples": [f.name for f in files]}
+
+
+@app.get("/samples/{name}")
+def sample_file(name: str):
+    p = _SAMPLES / Path(name).name
+    return FileResponse(str(p)) if p.exists() else HTMLResponse("not found", status_code=404)
+
+
+@app.post("/analyze_sample")
+def analyze_sample(name: str = Form(...), models: str = Form("clearvad"),
+                   threshold: float = Form(0.5), min_speech_ms: float = Form(100.0),
+                   min_silence_ms: float = Form(100.0)) -> dict:
+    _load_models()
+    p = _SAMPLES / Path(name).name
+    if not p.exists():
+        return {"error": f"sample not found: {name}"}
+    return _analyze_core(_decode(p.read_bytes()), models, threshold, min_speech_ms,
+                         min_silence_ms, name)
+
+
+@app.websocket("/stream")
+async def stream(ws: WebSocket) -> None:
+    """Real-time ClearVAD endpointing. Client sends raw float32 little-endian 512-sample (32 ms)
+    chunks @ 16 kHz; server replies {prob} per chunk with carried state (per connection)."""
+    await ws.accept()
+    _load_models()
+    m = _CLEARVAD
+    if m is None:
+        await ws.send_json({"error": "clearvad model not loaded"})
+        await ws.close()
+        return
+    state = m.new_state()
+    prev = np.zeros(CONTEXT, dtype=np.float32)
+    try:
+        while True:
+            buf = await ws.receive_bytes()
+            chunk = np.frombuffer(buf, dtype=np.float32)
+            if chunk.size < CHUNK:
+                chunk = np.concatenate([chunk, np.zeros(CHUNK - chunk.size, np.float32)])
+            chunk = chunk[:CHUNK]
+            prob, state = m.step(np.concatenate([prev, chunk]), state)
+            prev = chunk[-CONTEXT:]
+            await ws.send_json({"prob": round(float(prob), 4)})
+    except WebSocketDisconnect:
+        return
 
 
 @app.post("/benchmark")

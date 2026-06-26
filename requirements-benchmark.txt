@@ -1,0 +1,7 @@
+# Extra deps to benchmark ClearVAD against OTHER models in the Benchmark Studio.
+# ClearVAD itself only needs requirements-serve.txt; add these for the competitors.
+torch>=2.0            # CPU build is fine: pip install torch --index-url https://download.pytorch.org/whl/cpu
+silero-vad>=5.0       # Silero VAD v5
+webrtcvad>=2.0.10     # WebRTC VAD   (on Windows use:  pip install webrtcvad-wheels)
+# NeMo Frame-VAD MarbleNet (heavy; Linux/server recommended, optional — uncomment to enable):
+# nemo_toolkit[asr]>=1.23

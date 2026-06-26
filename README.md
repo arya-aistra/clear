@@ -82,9 +82,17 @@ a labeled set. Heavier than the lean serving app (loads the competitor models), 
 extras for the models you want compared (silero/nemo/torch).
 
 ```bash
+# optional: bundle demo wavs (real speech if LibriSpeech present, else synthetic) for zero-upload demo
+python scripts/make_demo_samples.py
+# optional: add the OTHER models to compare against (ClearVAD alone needs only requirements-serve.txt)
+pip install -r requirements-benchmark.txt
+
 uvicorn clearvad.serving.benchmark_app:app --host 0.0.0.0 --port 8100
-# open http://localhost:8100  — upload a wav, pick models, Analyze; "Accuracy benchmark" ranks on a labeled cache
+# open http://localhost:8100
 ```
+Features: **🎤 live mic** (realtime ClearVAD endpointing over WebSocket `/stream`), **sample buttons**
+(zero upload), **upload**, multi-model speech tracks + latency/RTF/agreement, a **session leaderboard**,
+and an **accuracy leaderboard** on a labeled cache. Models not installed are shown as "unavailable".
 
 ### Hugging Face packaging
 
