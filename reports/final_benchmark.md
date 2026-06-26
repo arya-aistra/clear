@@ -157,6 +157,14 @@ pipeline) with parity the more likely outcome. Defensible today: **novel CfC cor
 near-parity-on-noisy accuracy, ~300k params, INT8-deployable (Silero can't), lower FAR, faster
 endpoint — a SOTA accuracy-per-parameter frontier result.**
 
+**Noise-diversity null result (locks the model).** Adding a 3rd urban-noise family
+(`musan+esc50+urbansound8k`, `checkpoints_cfc_divnoise2`) did NOT move the held-out-DEMAND gap:
+noisy AUROC 0.947→0.9475 (flat), FAR 0.205→0.250 (worse). So noise-family coverage is **not** the
+bottleneck — the residual ~2.3 pt noisy gap is Silero's raw data scale, not noise variety. (Divnoise's
+clean F1 0.9593 marginally edges Silero's 0.9583 — confirming clean parity.) **Decision: lock
+`checkpoints_cfc_20h`** (noisy FAR 0.205 < divnoise 0.250; clean identical) as the shipping model;
+move to consolidation (INT8 export + verification, paper/model-card, serving).
+
 ## Honest caveats (so the result survives scrutiny)
 1. **Eval labels are segment-level** (a speech segment is labeled all-speech incl. intra-pauses).
    Part of the raw F1 gap is convention-alignment; the **AUC, miss-rate, and short-silence-on-true-
