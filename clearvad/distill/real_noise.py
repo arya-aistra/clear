@@ -60,7 +60,16 @@ class RealNoiseSource:
         from clearvad.utils.audio import to_mono
 
         LOG.info("Streaming HF noise dataset %s (parquet) ...", hf_repo)
-        ds = load_dataset(hf_repo, split="train", streaming=True)
+        split = "train"                                   # some noise repos (e.g. FSD50k) lack 'train'
+        try:
+            from datasets import get_dataset_split_names
+            avail = get_dataset_split_names(hf_repo)
+            if "train" not in avail and avail:
+                split = avail[0]
+                LOG.info("  no 'train' split; using %r (available: %s)", split, avail)
+        except Exception:  # noqa: BLE001
+            pass
+        ds = load_dataset(hf_repo, split=split, streaming=True)
         audio_col = None
         for name, feat in (getattr(ds, "features", None) or {}).items():
             if feat.__class__.__name__ == "Audio":
