@@ -54,6 +54,34 @@ pip install -e ".[train,serve,dev]"      # editable install with all extras
 
 ---
 
+## Serving (FastAPI / Docker — lean, torch-free)
+
+Serves the INT8 binary (`dist/clearvad_lite.onnx`, ~0.46 MB) with per-request streaming state.
+
+```bash
+# Local
+pip install -r requirements-serve.txt
+CLEARVAD_MODEL=dist/clearvad_lite.onnx uvicorn clearvad.serving.app:app --port 8000
+
+# Docker
+docker build -t clearvad . && docker run -p 8000:8000 clearvad
+```
+
+| Endpoint | Use |
+|--|--|
+| `GET /health` | liveness + model info |
+| `POST /vad` | batch: `{audio:[float], sample_rate?, threshold?, min_speech_ms?, min_silence_ms?}` → per-chunk probs + speech segments (s) |
+| `POST /vad/file` | same, multipart wav/flac upload |
+| `WS /stream` | real-time: send raw float32 512-sample chunks, receive `{prob}` per chunk (per-connection state) — for voice-agent endpointing |
+
+```bash
+curl -s localhost:8000/vad -H 'content-type: application/json' \
+  -d "{\"audio\": $(python -c 'import json;print(json.dumps([0.0]*16000))'), \"threshold\":0.5, \"min_speech_ms\":100, \"min_silence_ms\":100}"
+curl -s -F file=@sample.wav "localhost:8000/vad/file?threshold=0.5"
+```
+
+---
+
 ## Phase 0 — run order (remote GPU/Jupyter server)
 
 ```bash

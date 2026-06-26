@@ -1,0 +1,8 @@
+# Lean serving deps (no PyTorch). For the INT8 ONNX ClearVAD-CfC service.
+onnxruntime>=1.17
+numpy>=1.24
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+soundfile>=0.12          # /vad/file wav/flac decode
+python-multipart>=0.0.9  # multipart upload for /vad/file
