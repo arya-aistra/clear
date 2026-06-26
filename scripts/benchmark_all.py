@@ -3,14 +3,14 @@
 
 Scores every AVAILABLE VAD on the SAME frame-accurate eval cache(s) across the standard metrics
 (AUROC, PR-AUC, TPR@FPR=0.315, F1, FAR, MR, onset/endpoint latency) + short-silence detection.
-Models: clearvad (ours), silero, webrtc, pyannote, tenvad, fireredvad, nemo. Any model that is not
-installed (or lacks an HF token) is reported in an "unavailable" section, not fatal.
+Models: clearvad (ours), silero, webrtc, nemo. Any model not installed is reported in an
+"unavailable" section, not fatal.
 
 Run:
   python scripts/benchmark_all.py \
     --checkpoint checkpoints_cfc_20h/stage2_final.pt --model-config configs/model/liquidvad_l2.yaml \
     --caches clean:data/eval/aligned_eval_pad40.npz noisy:data/eval/aligned_eval_noisy.npz \
-    --models clearvad silero webrtc pyannote tenvad nemo fireredvad
+    --models clearvad silero webrtc nemo
 """
 
 from __future__ import annotations
@@ -122,8 +122,7 @@ def main() -> None:
                     default=["clean:data/eval/aligned_eval_pad40.npz",
                              "noisy:data/eval/aligned_eval_noisy.npz"])
     ap.add_argument("--models", nargs="+",
-                    default=["clearvad", "silero", "webrtc", "pyannote", "tenvad", "nemo",
-                             "fireredvad"])
+                    default=["clearvad", "silero", "webrtc", "nemo"])
     ap.add_argument("--out", default="reports/phase8/benchmark_all.json")
     ap.add_argument("--md", default="reports/phase8/benchmark_all.md")
     args = ap.parse_args()

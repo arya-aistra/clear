@@ -98,19 +98,24 @@ real-time). FP32→INT8 F1 drop is **1.29 pp** (0.958 → 0.945); mixed-precisio
 Frame-accurate eval (forced alignment; identical labels for all models). Full detail in
 `reports/final_benchmark.md`.
 
-| | Silero v5 | **ClearVAD (CfC)** | WebRTC |
-|--|--|--|--|
-| Clean F1 / AUROC | 0.958 / 0.972 | **0.958** / 0.968 | 0.922 / 0.776 |
-| Noisy (held-out DEMAND) F1 / AUROC | 0.960 / 0.970 | 0.943 / 0.947 | 0.946 / 0.882 |
-| False-alarm rate (clean) | 0.224 | **0.130** | 0.516 |
-| Onset / endpoint (clean, ms) | 28 / 112 | 23 / **44** | 4 / 180 |
-| Params / INT8 size | 309,633 / ❌ INT8 | 302,980 / **0.457 MB** | — |
+| | **ClearVAD (CfC)** | Silero v5 | NeMo Frame-VAD | WebRTC |
+|--|--|--|--|--|
+| Clean F1 / AUROC | **0.958** / 0.968 | 0.958 / **0.972** | 0.951 / 0.972 | 0.922 / 0.776 |
+| Noisy (held-out DEMAND) F1 / AUROC | 0.943 / 0.947 | 0.960 / **0.970** | 0.949 / 0.966 | 0.946 / 0.882 |
+| False-alarm rate (clean) | **0.130** | 0.224 | 0.315 | 0.516 |
+| Short-pause @256 ms | **1.00** | 0.88 | 0.19 | 0.51 |
+| Onset / endpoint (clean, ms) | 23 / 44 | 28 / 112 | **1 / 33** | 4 / 180 |
+| Params / INT8 | 302,980 / **0.457 MB** | 309,633 / ❌ | CNN / ❌ | — |
 
 **Architecture ablation:** swapping the temporal core G-SSM→CfC (identical front-end/encoder/head)
-lifted clean AUROC **0.915 → 0.947** — CfC is the stronger compact VAD core. ClearVAD **matches**
-Silero on clean (F1 tied), is near-parity on noisy, and **wins** false-alarm rate, endpoint latency,
-size, and INT8-deployability; Silero retains a small AUROC edge and a raw per-chunk CPU-latency
-advantage (0.077 vs 0.161 ms; both far under real-time).
+lifted clean AUROC **0.915 → 0.947** — CfC is the stronger compact VAD core. Silero and NeMo
+Frame-VAD are the accuracy leaders (~0.97 AUROC); ClearVAD **matches** them on clean (F1 tied with
+Silero, within ~0.4 pt AUROC) and is near-parity on noisy, while having the **lowest false-alarm
+rate of all four** (0.130 vs 0.224 / 0.315 / 0.516), the **best short-pause sensitivity** (256 ms:
+1.00 vs 0.88 / 0.19 / 0.51), and being the **only ~300k-param, INT8-deployable** model in the set.
+NeMo is fastest on latency (small CNN) but has the highest false-alarm rate and barely detects short
+pauses; Silero retains a small AUROC edge and a raw per-chunk CPU-latency advantage. No model in the
+set is strictly dominant — ClearVAD owns the precision / short-pause / footprint frontier.
 
 ## 7. Limitations & honest caveats
 
