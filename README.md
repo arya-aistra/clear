@@ -74,6 +74,25 @@ docker build -t clearvad . && docker run -p 8000:8000 clearvad
 | `POST /vad/file` | same, multipart wav/flac upload |
 | `WS /stream` | real-time: send raw float32 512-sample chunks, receive `{prob}` per chunk (per-connection state) — for voice-agent endpointing |
 
+### Benchmark Studio (web UI — compare models live)
+
+A browser app to test ClearVAD against other VADs on your own audio, with live per-model speech
+tracks, latency / real-time-factor, agreement, a session leaderboard, and an accuracy leaderboard on
+a labeled set. Heavier than the lean serving app (loads the competitor models), so install the train
+extras for the models you want compared (silero/nemo/torch).
+
+```bash
+uvicorn clearvad.serving.benchmark_app:app --host 0.0.0.0 --port 8100
+# open http://localhost:8100  — upload a wav, pick models, Analyze; "Accuracy benchmark" ranks on a labeled cache
+```
+
+### Hugging Face packaging
+
+```bash
+python scripts/prepare_hf.py            # copies dist/*.onnx + config into hf/, validates, writes manifest
+cd hf && huggingface-cli upload <user>/clearvad-cfc . .   # README.md is the model card
+```
+
 ```bash
 curl -s localhost:8000/vad -H 'content-type: application/json' \
   -d "{\"audio\": $(python -c 'import json;print(json.dumps([0.0]*16000))'), \"threshold\":0.5, \"min_speech_ms\":100, \"min_silence_ms\":100}"
